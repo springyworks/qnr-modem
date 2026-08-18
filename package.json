@@ -1,0 +1,26 @@
+{
+  "name": "qnr-modem",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "144-tone MFSK weak signal HF modem with repeat correlation",
+  "bin": {
+    "qnr": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc --watch",
+    "start": "node dist/cli.js",
+    "tx": "node dist/cli.js tx",
+    "rx": "node dist/cli.js rx",
+    "selftest": "node dist/selftest.js"
+  },
+  "dependencies": {
+    "blessed": "^0.1.81"
+  },
+  "devDependencies": {
+    "@types/blessed": "^0.1.25",
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.2"
+  }
+}
