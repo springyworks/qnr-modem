@@ -20,6 +20,23 @@ npm run build
 
 Requires Node 22+ and PipeWire (`pw-play` / `pw-record`, standard on Ubuntu).
 
+That builds the program but does **not** put it on your `PATH`. Either run it
+directly:
+
+```bash
+node dist/cli.js tx "CQ DE QNR"
+```
+
+or install the `qnr` command once:
+
+```bash
+npm link            # creates a global symlink to this checkout
+```
+
+If `npm link` fails with a permissions error, either point npm at a user-owned
+prefix (`npm config set prefix ~/.local` and make sure `~/.local/bin` is on your
+`PATH`) or just use `node dist/cli.js`.
+
 ## Use
 
 ```bash
@@ -29,7 +46,12 @@ qnr rx                         # listen on the default audio input
 qnr rx -i in.wav               # decode a WAV file
 ```
 
-Or without installing: `node dist/cli.js tx "CQ DE QNR"`.
+Without linking, replace `qnr` with `node dist/cli.js`, or use the npm scripts:
+
+```bash
+npm run tx -- "CQ DE QNR"
+npm run rx
+```
 
 Audio routing is deliberately **not** handled by this program. Start it, then point
 the stream at your radio with `pavucontrol` (Playback / Recording tabs).
