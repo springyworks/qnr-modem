@@ -1,6 +1,7 @@
 import type { WattersonProfile } from './channel.js';
 import type { FoldConfig, FoldTask } from './foldTrial.js';
 import { runTasks, workerCount } from './pool.js';
+import { GAP_SECONDS } from './protocol.js';
 
 const FOLD_WORKER = new URL('./foldWorker.js', import.meta.url);
 const TRIALS = Number(process.argv.find((a) => a.startsWith('--trials='))?.slice(9) ?? 24);
@@ -17,14 +18,18 @@ const BEST: FoldConfig = {
   preamblePairs: 4,
   rate: 3,
   repeats: 8,
-  gapSeconds: 8,
+  gapSeconds: GAP_SECONDS,
 };
 
-const snrs = [-21, -22, -23, -24, -25];
-const profiles = [BAD];
+const snrs = (process.argv.find((a) => a.startsWith('--snrs='))?.slice(7) ?? '-21,-22,-23,-24,-25')
+  .split(',')
+  .map(Number);
+const profiles = (process.argv.find((a) => a.startsWith('--profile='))?.slice(10) ?? 'bad')
+  .split(',')
+  .map((name) => (name === 'worst' ? WORST : BAD));
 
 async function main(): Promise<void> {
-  console.log(`Final check - r1/3, interleave 64, 8 s gaps, 8 repeats, ${TRIALS} trials/cell, ${workerCount()} workers`);
+  console.log(`Final check - r1/3, interleave 64, ${GAP_SECONDS}s gaps, 8 repeats, ${TRIALS} trials/cell, ${workerCount()} workers`);
 
   const infoBits = MESSAGE.length * 8;
   const burstSeconds = (8 + Math.ceil((16 + infoBits + 16 + 6) * 3 / 7) + 3) / 8;

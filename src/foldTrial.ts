@@ -3,7 +3,7 @@ import { SAMPLE_RATE, symbolSamples } from './config.js';
 import type { CodeRate } from './conv.js';
 import { dataSymbolCount, foldDecode } from './fold.js';
 import { mulberry32 } from './rng.js';
-import { modulateSchedule, textToSymbols } from './tx.js';
+import { modulate, modulateSchedule, textToSymbols } from './tx.js';
 
 export interface FoldConfig {
   baud: number;
@@ -63,7 +63,9 @@ export function runFoldTrial(
     snrDb,
     profile,
     seed,
-    referencePower: meanPower(bursts),
+    // Power while transmitting, not averaged over the gaps: otherwise a longer listening
+    // gap would silently flatter the SNR figure without changing the signal at all.
+    referencePower: meanPower(modulate(cfg.message, cfg.baud, 0.5, SAMPLE_RATE, 'conv', frameOpts)),
   });
 
   const decoded = foldDecode(faded, {
@@ -74,7 +76,7 @@ export function runFoldTrial(
     interleaverWidth: cfg.interleaverWidth,
     rate: cfg.rate,
   });
-  return decoded === cfg.message;
+  return decoded.text === cfg.message;
 }
 
 export function runFoldCell(task: FoldTask): number {

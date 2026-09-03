@@ -29,10 +29,13 @@ export class ToneDetector {
   private readonly freqs: Float64Array;
   private readonly amplitudes: Float64Array;
 
-  constructor(private readonly sampleRate: number = SAMPLE_RATE) {
+  constructor(
+    private readonly sampleRate: number = SAMPLE_RATE,
+    offsetHz = 0
+  ) {
     this.freqs = new Float64Array(NUM_TONES);
     this.amplitudes = new Float64Array(NUM_TONES);
-    for (let s = 0; s < NUM_TONES; s++) this.freqs[s] = toneFreq(s);
+    for (let s = 0; s < NUM_TONES; s++) this.freqs[s] = toneFreq(s, offsetHz);
   }
 
   detect(samples: Float32Array, offset: number, length: number): ToneEstimate {

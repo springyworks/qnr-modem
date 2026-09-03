@@ -21,9 +21,12 @@ export const BITS_PER_SYMBOL = 7;
 export type FecMode = 'hamming' | 'conv';
 export const DEFAULT_FEC: FecMode = 'conv';
 
-export function toneFreq(symbol: number): number {
-  return (BASE_BIN + symbol * TONE_SPACING_BINS) * HZ_PER_BIN;
+/** offsetHz shifts the whole comb to follow a mistuned transmitter or receiver. */
+export function toneFreq(symbol: number, offsetHz = 0): number {
+  return (BASE_BIN + symbol * TONE_SPACING_BINS) * HZ_PER_BIN + offsetHz;
 }
+
+export const TONE_SPACING_HZ = TONE_SPACING_BINS * HZ_PER_BIN;
 
 export function symbolSamples(baud: number, sampleRate = SAMPLE_RATE): number {
   return Math.round(sampleRate / baud);

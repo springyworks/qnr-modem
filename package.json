@@ -13,7 +13,9 @@
     "start": "node dist/cli.js",
     "tx": "node dist/cli.js tx",
     "rx": "node dist/cli.js rx",
-    "selftest": "node dist/selftest.js"
+    "rxtx": "node dist/cli.js rxtx",
+    "selftest": "node dist/selftest.js",
+    "integration": "node dist/integration.js"
   },
   "dependencies": {
     "blessed": "^0.1.81"

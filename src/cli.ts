@@ -1,29 +1,42 @@
 #!/usr/bin/env node
 import { basename } from 'node:path';
-import { Worker } from 'node:worker_threads';
-import { playSamples, startCapture, type Capture } from './audio.js';
+import { createAudioIdentity, playSamples, startCapture } from './audio.js';
+import { ITU_PROFILES, applyChannel, meanPower, type WattersonProfile } from './channel.js';
 import { SAMPLE_RATE } from './config.js';
-import { foldDecode } from './fold.js';
+import { ContinuousReceiver, laneForPhase, type HeardFrame } from './live.js';
+import { CHAT_PAYLOAD_BYTES, decodeChatMessage, encodeChatMessage } from './packet.js';
+import { workerCount } from './pool.js';
+import { resample } from './resample.js';
+import { DecodeSearch, type SearchResult } from './search.js';
+import { OFFSET_SPAN_HZ } from './tune.js';
 import {
   AMPLITUDE,
   BAUD,
   BURST_SAMPLES,
+  DATA_SYMBOLS,
   DECODE_OPTIONS,
   FRAME_OPTIONS,
-  GAP_SECONDS,
-  LEAD_SECONDS,
-  PAYLOAD_BYTES,
+  GUARD_SAMPLES,
   PERIOD_SAMPLES,
   REPEATS,
-  SCHEDULE_SAMPLES,
-  padMessage,
+  SLOT_SAMPLES,
   summary,
 } from './protocol.js';
-import { modulateSchedule } from './tx.js';
-import { readWav16, writeWav16 } from './wav.js';
+import { runRxTx } from './rxtx.js';
+import { modulateChatMessage } from './tx.js';
+import { readWav, writeWav16 } from './wav.js';
 
 const BAR_WIDTH = 32;
-const DECODE_WORKER = new URL('./decodeWorker.js', import.meta.url);
+const SLOT_MS = (SLOT_SAMPLES / SAMPLE_RATE) * 1000;
+
+/** Channel simulation for making test material; `none` is AWGN only. */
+const PROFILES: Record<string, WattersonProfile | null> = { none: null, ...ITU_PROFILES };
+
+export interface ChannelRequest {
+  snrDb: number;
+  profile: WattersonProfile | null;
+  seed: number;
+}
 
 const dbfs = (rms: number): number => 20 * Math.log10(Math.max(rms, 1e-6));
 
@@ -47,21 +60,71 @@ function usage(): void {
   qnr tx "MESSAGE" -o out.wav write the transmission to a WAV file
   qnr rx                      listen on the default audio input
   qnr rx -i in.wav            decode a WAV file
+  qnr rxtx ["MESSAGE"]        transmit (if given a message) and listen at the same time
+  qnr rxtx -tui               same, with the mouse-aware station dashboard
+
+Messages are plain chat: up to ${CHAT_PAYLOAD_BYTES} printable ASCII characters per frame,
+no per-character mode, no ACK handshake, no automatic retry. \`rxtx -tui\` sends a
+typed line as soon as Enter is pressed (Shift+Enter inserts a line break instead),
+repeated back-to-back as many times as the dashboard's FEC strength control says.
+
+Test-signal options for tx (both to file and to the air):
+  --snr=<dB>                  add noise at this SNR, 3 kHz reference, measured
+                              while transmitting so gaps do not flatter it
+  --profile=<name>            fading channel: ${Object.keys(PROFILES).join(', ')}
+  --seed=<n>                  repeatable channel realisation (default 1)
+  --jobs=N                    worker threads (default: cores - 1)
+
+Examples:
+  qnr tx "CQ CQ" -o weak.wav --snr=-20 --profile=poor
+  qnr rxtx -tui
 
 Audio routing is left to the system mixer (pavucontrol); there are no device
 options. Modem parameters are fixed by the protocol and cannot be changed.
 
+The receiver searches +/-${OFFSET_SPAN_HZ} Hz of tuning error and a few thousand ppm of clock
+drift, so a mistuned transmitter or a resampled WebSDR feed still decodes.
+Input WAVs at any sample rate are resampled to ${SAMPLE_RATE} Hz.
+
 ${summary()}`);
 }
 
-async function transmit(message: string, outFile?: string): Promise<void> {
-  const padded = padMessage(message);
-  const bursts = modulateSchedule(padded, BAUD, REPEATS, GAP_SECONDS, AMPLITUDE, SAMPLE_RATE, FRAME_OPTIONS);
-  const lead = LEAD_SECONDS * SAMPLE_RATE;
-  const samples = new Float32Array(lead + bursts.length + SAMPLE_RATE);
-  samples.set(bursts, lead);
+function printableMessage(text: string): string {
+  const message = decodeChatMessage(encodeChatMessage(text));
+  if (!message) throw new Error(`a transmission needs at least one printable ASCII character (max ${CHAT_PAYLOAD_BYTES})`);
+  return message;
+}
 
-  console.log(`TX  "${padded.trimEnd()}"  (${(samples.length / SAMPLE_RATE).toFixed(0)}s, ${REPEATS} bursts)`);
+function chatSchedule(message: string): { samples: Float32Array; firstBurst: Float32Array } {
+  const burst = modulateChatMessage(encodeChatMessage(message), DATA_SYMBOLS, BAUD, AMPLITUDE, SAMPLE_RATE, FRAME_OPTIONS);
+  const samples = new Float32Array(REPEATS * PERIOD_SAMPLES + SAMPLE_RATE);
+  for (let repeat = 0; repeat < REPEATS; repeat++) {
+    samples.set(burst, repeat * PERIOD_SAMPLES + GUARD_SAMPLES);
+  }
+  return { samples, firstBurst: burst };
+}
+
+async function transmit(rawMessage: string, outFile?: string, channel?: ChannelRequest): Promise<void> {
+  const message = printableMessage(rawMessage);
+  const clean = chatSchedule(message);
+
+  console.log(`TX  "${message}"  (${(clean.samples.length / SAMPLE_RATE).toFixed(0)}s, ${REPEATS} repeats)`);
+
+  if (channel) {
+    const name = channel.profile ? channel.profile.name : 'AWGN only';
+    console.log(`    channel ${name}, ${channel.snrDb} dB SNR (3 kHz ref), seed ${channel.seed}`);
+  }
+
+  const samples = channel
+    ? applyChannel(clean.samples, {
+        sampleRate: SAMPLE_RATE,
+        snrDb: channel.snrDb,
+        profile: channel.profile,
+        seed: channel.seed,
+        // Power while transmitting, so the figure means the same whatever the gaps are.
+        referencePower: meanPower(clean.firstBurst),
+      })
+    : clean.samples;
 
   if (outFile) {
     writeWav16(outFile, samples, SAMPLE_RATE);
@@ -75,14 +138,16 @@ async function transmit(message: string, outFile?: string): Promise<void> {
     const pos = Math.floor(((Date.now() - started) / 1000) * SAMPLE_RATE);
     if (pos >= samples.length) return;
     const block = samples.subarray(pos, Math.min(pos + blockSamples, samples.length));
-    const inBurst = pos >= lead && (pos - lead) % PERIOD_SAMPLES < BURST_SAMPLES;
-    const burst = Math.min(REPEATS, Math.floor((pos - lead) / PERIOD_SAMPLES) + 1);
-    const tag = pos < lead ? 'lead ' : inBurst ? `TX ${burst}/${REPEATS}` : 'gap  ';
+    const inBurst = pos >= GUARD_SAMPLES && pos % PERIOD_SAMPLES < GUARD_SAMPLES + BURST_SAMPLES;
+    const burst = Math.min(REPEATS, Math.floor(pos / PERIOD_SAMPLES) + 1);
+    const tag = inBurst ? `TX ${burst}/${REPEATS}` : 'gap  ';
     process.stdout.write(`\r  ${tag}  ${levelBar(dbfs(rmsOf(block)))}  `);
   }, 100);
 
   try {
-    await playSamples(samples);
+    const identity = createAudioIdentity();
+    console.log(`    PipeWire ${identity.label} TX`);
+    await playSamples(samples, { identity });
   } finally {
     clearInterval(timer);
     process.stdout.write('\n');
@@ -90,79 +155,95 @@ async function transmit(message: string, outFile?: string): Promise<void> {
   console.log('Transmission complete.');
 }
 
-function decodeFile(file: string): void {
-  const { samples, sampleRate } = readWav16(file);
-  if (sampleRate !== SAMPLE_RATE) {
-    console.error(`${basename(file)} is ${sampleRate} Hz; this modem needs ${SAMPLE_RATE} Hz.`);
-    process.exitCode = 1;
-    return;
-  }
+const tuningNote = (r: SearchResult): string => {
+  if (!r.tuning) return '';
+  const sign = (v: number): string => (v >= 0 ? '+' : '');
+  return `  tuning ${sign(r.offsetHz)}${r.offsetHz.toFixed(1)} Hz, clock ${sign(r.driftPpm)}${r.driftPpm.toFixed(0)} ppm`;
+};
 
-  console.log(`RX  ${basename(file)}  (${(samples.length / SAMPLE_RATE).toFixed(0)}s)  decoding...`);
-  const text = foldDecode(samples, DECODE_OPTIONS).trimEnd();
-  if (text) {
-    console.log(`\n  >> "${text}"  [CRC OK]\n`);
-  } else {
-    console.log('\n  no frame decoded\n');
-    process.exitCode = 1;
+function heardFrameNote(frame: HeardFrame): string {
+  if (frame.source === 'loud') return '  direct off-grid decode';
+  const sign = (value: number): string => (value >= 0 ? '+' : '');
+  return `  ${frame.bursts}x LLR, tuning ${sign(frame.offsetHz ?? 0)}${(frame.offsetHz ?? 0).toFixed(1)} Hz, clock ${sign(frame.driftPpm ?? 0)}${(frame.driftPpm ?? 0).toFixed(0)} ppm`;
+}
+
+async function decodeFile(file: string): Promise<void> {
+  const wav = readWav(file);
+  const samples = resample(wav.samples, wav.sampleRate, SAMPLE_RATE);
+  const seconds = samples.length / SAMPLE_RATE;
+  const rateNote = wav.sampleRate === SAMPLE_RATE ? '' : `  ${wav.sampleRate} Hz -> ${SAMPLE_RATE} Hz`;
+
+  const jobs = workerCount();
+  console.log(`RX  ${basename(file)}  (${seconds.toFixed(0)}s)${rateNote}  ${jobs} threads  searching...`);
+
+  const search = new DecodeSearch(DECODE_OPTIONS, jobs);
+  try {
+    const results = await search.decodeAll(samples, (p) => {
+      process.stdout.write(`\r  ${p.stage === 'tune' ? 'tuned  ' : 'decode '} ${p.detail}${' '.repeat(20)}`);
+    }, 0);
+    process.stdout.write(`\r${' '.repeat(70)}\r`);
+
+    const messages = results
+      .map((result) => ({ result, text: decodeChatMessage(result.text) }))
+      .filter((entry): entry is { result: SearchResult; text: string } => entry.text !== undefined && entry.text.length > 0);
+
+    if (messages.length > 0) {
+      console.log('');
+      for (const { result, text } of messages) {
+        const lane = laneForPhase(result.phaseSamples);
+        console.log(`  >> [${lane}] "${text}"  [CRC OK]  ${result.bursts ?? 1}x LLR${tuningNote(result)}`);
+      }
+      console.log('');
+    } else {
+      console.log('\n  no frame decoded\n');
+      process.exitCode = 1;
+    }
+  } finally {
+    search.close();
   }
 }
 
 function listen(): void {
-  const capacity = SCHEDULE_SAMPLES + 6 * SAMPLE_RATE;
-  const ring = new Float32Array(capacity);
-  let write = 0;
-  let filled = 0;
-  let peak = -60;
-  let busy = false;
-  let lastText = '';
-
-  const worker = new Worker(DECODE_WORKER);
-  worker.on('message', (text: string) => {
-    busy = false;
-    if (text && text !== lastText) {
-      lastText = text;
-      process.stdout.write(`\r${' '.repeat(70)}\r`);
-      console.log(`  >> "${text}"  [CRC OK]  ${new Date().toLocaleTimeString()}`);
-    }
-  });
-  worker.on('error', (e) => console.error(`\ndecoder error: ${e.message}`));
-
-  console.log(`RX  listening on the default audio input`);
-  console.log(`    needs ${(SCHEDULE_SAMPLES / SAMPLE_RATE).toFixed(0)}s of audio before the first decode attempt\n`);
-
-  const capture: Capture = startCapture(
-    (block) => {
-      for (const v of block) {
-        ring[write] = v;
-        write = (write + 1) % capacity;
-      }
-      filled = Math.min(capacity, filled + block.length);
-      peak = Math.max(peak, dbfs(rmsOf(block)));
+  const jobs = workerCount();
+  const identity = createAudioIdentity();
+  const receiver = new ContinuousReceiver(
+    {
+      onFrame: (frame) => {
+        const text = decodeChatMessage(frame.text);
+        process.stdout.write(`\r${' '.repeat(120)}\r`);
+        if (text === undefined || text.length === 0) {
+          console.log(`  >> [${frame.lane}] ignored non-chat frame  [CRC OK]  ${new Date().toLocaleTimeString()}${heardFrameNote(frame)}`);
+          return;
+        }
+        console.log(`  >> [${frame.lane}] "${text}"  [CRC OK]  ${new Date().toLocaleTimeString()}${heardFrameNote(frame)}`);
+      },
+      onError: (error) => console.error(`\ndecoder error: ${error.message}`),
     },
-    { onError: (e) => console.error(`\ncapture error: ${e.message}`) }
+    jobs
+  );
+
+  console.log(`RX  ${identity.label} listening on the default audio input  (${jobs} decoder threads)`);
+  console.log('    direct decode for loud off-grid frames; folded LLR search once per basic-frame\n');
+
+  const capture = startCapture(
+    (block) => receiver.push(block),
+    { identity, onError: (e) => console.error(`\ncapture error: ${e.message}`) }
   );
 
   const meter = setInterval(() => {
-    const ready = Math.min(100, (filled / SCHEDULE_SAMPLES) * 100);
-    process.stdout.write(`\r  IN   ${levelBar(peak)}  buffer ${ready.toFixed(0)}%  `);
-    peak = -60;
+    const status = receiver.getStatus();
+    const peak = receiver.takePeakDb();
+    const activity = status.decoding ? status.progress : status.evidence;
+    process.stdout.write(`\r  IN   ${levelBar(peak)}  buffer ${status.readyPercent.toFixed(0)}%  ${activity}  `);
   }, 200);
 
-  const attempt = setInterval(() => {
-    if (busy || filled < SCHEDULE_SAMPLES) return;
-    busy = true;
-    const ordered = new Float32Array(filled);
-    const start = (write - filled + capacity) % capacity;
-    for (let i = 0; i < filled; i++) ordered[i] = ring[(start + i) % capacity]!;
-    worker.postMessage(ordered);
-  }, 15000);
+  const attempt = setInterval(() => void receiver.decode(), SLOT_MS);
 
   const stop = (): void => {
     clearInterval(meter);
     clearInterval(attempt);
     capture.stop();
-    void worker.terminate();
+    receiver.close();
     process.stdout.write('\n');
     process.exit(0);
   };
@@ -181,24 +262,50 @@ async function main(): Promise<void> {
     return undefined;
   };
 
+  // `--name=value` form, so a negative SNR is never mistaken for another flag.
+  const option = (name: string): string | undefined => {
+    const prefix = `--${name}=`;
+    return args.find((a) => a.startsWith(prefix))?.slice(prefix.length);
+  };
+
+  const channelRequest = (): ChannelRequest | undefined => {
+    const snr = option('snr');
+    const profileName = option('profile');
+    if (snr === undefined && profileName === undefined) return undefined;
+    if (snr === undefined) throw new Error('--profile needs --snr=<dB> as well');
+
+    const snrDb = Number(snr);
+    if (!Number.isFinite(snrDb)) throw new Error(`--snr=${snr} is not a number`);
+
+    const key = profileName ?? 'none';
+    if (!(key in PROFILES)) {
+      throw new Error(`unknown --profile=${key}; try ${Object.keys(PROFILES).join(', ')}`);
+    }
+    return { snrDb, profile: PROFILES[key]!, seed: Number(option('seed') ?? 1) || 1 };
+  };
+
   if (mode === 'tx') {
     const message = args.slice(1).find((a) => !a.startsWith('-') && a !== flag('-o', '--out'));
     if (!message) {
-      console.error('tx needs a message, e.g. qnr tx "CQ DE QNR"');
+      console.error('tx needs a message, e.g. qnr tx "CQ CQ"');
       process.exitCode = 1;
       return;
     }
-    if (message.length > PAYLOAD_BYTES) {
-      console.log(`note: message truncated to ${PAYLOAD_BYTES} characters`);
-    }
-    await transmit(message, flag('-o', '--out'));
+    await transmit(message, flag('-o', '--out'), channelRequest());
     return;
   }
 
   if (mode === 'rx') {
     const input = flag('-i', '--in');
-    if (input) decodeFile(input);
+    if (input) await decodeFile(input);
     else listen();
+    return;
+  }
+
+  if (mode === 'rxtx') {
+    const tui = args.includes('-tui') || args.includes('--tui');
+    const message = args.slice(1).find((a) => !a.startsWith('-'));
+    runRxTx({ message, tui });
     return;
   }
 

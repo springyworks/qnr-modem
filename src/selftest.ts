@@ -1,9 +1,22 @@
 import { SAMPLE_RATE, type FecMode } from './config.js';
+import { createAudioIdentity } from './audio.js';
 import { convEncode, viterbiDecode } from './conv.js';
+import { foldDecodeAll } from './fold.js';
 import { buildInfoBits, parseInfoBits } from './framing.js';
 import { hammingDecode, hammingEncode } from './hamming.js';
-import { Receiver } from './rx.js';
-import { modulate } from './tx.js';
+import { decodeChatMessage, encodeChatMessage } from './packet.js';
+import {
+  BAUD,
+  DATA_SYMBOLS,
+  DECODE_OPTIONS,
+  FRAME_OPTIONS,
+  GUARD_SAMPLES,
+  PAYLOAD_BYTES,
+  PERIOD_SAMPLES,
+  SLOT_SAMPLES,
+} from './protocol.js';
+import { Receiver, type ReceiverOptions } from './rx.js';
+import { modulate, modulateChatMessage } from './tx.js';
 
 let failures = 0;
 
@@ -35,9 +48,9 @@ function testHamming(): void {
   check('every single-bit error is corrected', correctedAll);
 }
 
-function decodeSamples(samples: Float32Array, baud: number, mode: FecMode = 'hamming'): string {
+function decodeSamples(samples: Float32Array, baud: number, mode: FecMode = 'hamming', opts: ReceiverOptions = {}): string {
   let text = '';
-  const rx = new Receiver(baud, { onChar: (ch) => (text += ch) }, SAMPLE_RATE, mode);
+  const rx = new Receiver(baud, { onChar: (ch) => (text += ch) }, SAMPLE_RATE, mode, opts);
   const chunk = 4096;
   for (let i = 0; i < samples.length; i += chunk) {
     rx.push(samples.subarray(i, Math.min(i + chunk, samples.length)));
@@ -109,6 +122,87 @@ function testConvModem(): void {
   }
 }
 
+function testChatMessage(): void {
+  console.log('Chat message frame');
+  const encoded = encodeChatMessage('HELLO WORLD 12345');
+  const decoded = decodeChatMessage(encoded);
+  check('truncates to 16 payload characters', decoded === 'HELLO WORLD 1234', `got "${decoded}"`);
+
+  const short = decodeChatMessage(encodeChatMessage('HI'));
+  check('short messages round-trip without padding', short === 'HI', `got "${short}"`);
+
+  const identity = createAudioIdentity(new Date(2026, 7, 21, 8, 5), 4242);
+  check('PipeWire station labels carry time and process identity', identity.label === 'QNR 08:05 #4242' && identity.id === 'qnr-0805-4242');
+}
+
+function testChatMessageModem(): void {
+  console.log('Chat message MFSK loopback');
+  const expected = 'CQ CQ DE QNR';
+  const signal = withSilence(
+    modulateChatMessage(encodeChatMessage(expected), DATA_SYMBOLS, BAUD, 0.5, SAMPLE_RATE, FRAME_OPTIONS),
+    SAMPLE_RATE / 4
+  );
+  const decoded = decodeChatMessage(
+    decodeSamples(signal, BAUD, 'conv', {
+      interleaverWidth: FRAME_OPTIONS.interleaverWidth,
+      rate: FRAME_OPTIONS.rate,
+      maxPayloadBytes: PAYLOAD_BYTES,
+    })
+  );
+  check('chat frame survives FEC and CRC', decoded === expected, `got ${JSON.stringify(decoded)}`);
+
+  const shortExpected = 'HI';
+  const shortSignal = withSilence(
+    modulateChatMessage(encodeChatMessage(shortExpected), DATA_SYMBOLS, BAUD, 0.5, SAMPLE_RATE, FRAME_OPTIONS),
+    SAMPLE_RATE / 4
+  );
+  const shortDecoded = decodeChatMessage(
+    decodeSamples(shortSignal, BAUD, 'conv', {
+      interleaverWidth: FRAME_OPTIONS.interleaverWidth,
+      rate: FRAME_OPTIONS.rate,
+      maxPayloadBytes: PAYLOAD_BYTES,
+    })
+  );
+  check(
+    'a short message tiles its coded unit to fill the fixed burst',
+    shortDecoded === shortExpected,
+    `got ${JSON.stringify(shortDecoded)}`
+  );
+}
+
+function addSignal(target: Float32Array, signal: Float32Array, start: number): void {
+  for (let sampleIndex = 0; sampleIndex < signal.length; sampleIndex++) {
+    target[start + sampleIndex]! += signal[sampleIndex]!;
+  }
+}
+
+function testInterleavedFoldedStations(): void {
+  console.log('Three-frame chat repeat folding');
+  const messageA = 'STATION A';
+  const messageB = 'STATION B';
+  const burstA = modulateChatMessage(encodeChatMessage(messageA), DATA_SYMBOLS, BAUD, 0.5, SAMPLE_RATE, FRAME_OPTIONS);
+  const burstB = modulateChatMessage(encodeChatMessage(messageB), DATA_SYMBOLS, BAUD, 0.5, SAMPLE_RATE, FRAME_OPTIONS);
+  const repeats = 2;
+  const lead = Math.round(SAMPLE_RATE * 0.37);
+  const samples = new Float32Array(lead + repeats * PERIOD_SAMPLES);
+
+  for (let repeatIndex = 0; repeatIndex < repeats; repeatIndex++) {
+    const periodStart = lead + repeatIndex * PERIOD_SAMPLES;
+    addSignal(samples, burstA, periodStart + GUARD_SAMPLES);
+    addSignal(samples, burstB, periodStart + 2 * SLOT_SAMPLES + GUARD_SAMPLES);
+  }
+
+  const results = foldDecodeAll(samples, DECODE_OPTIONS);
+  const stationA = results.find((result) => decodeChatMessage(result.text) === messageA);
+  const stationB = results.find((result) => decodeChatMessage(result.text) === messageB);
+  check('transmit and second-listen frames decode', Boolean(stationA && stationB));
+  check(
+    'each station combines its own repeats',
+    stationA?.bursts === repeats && stationB?.bursts === repeats,
+    `got A=${stationA?.bursts ?? 0}, B=${stationB?.bursts ?? 0}`
+  );
+}
+
 const LENGTH_OFFSET = 20;
 
 testHamming();
@@ -116,6 +210,9 @@ testModemLoopback();
 testNoisyChannel();
 testConvCode();
 testConvModem();
+testChatMessage();
+testChatMessageModem();
+testInterleavedFoldedStations();
 
 console.log(failures === 0 ? '\nAll checks passed.' : `\n${failures} check(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);

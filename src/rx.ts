@@ -11,9 +11,9 @@ import {
 } from './config.js';
 import { viterbiDecode, type CodeRate } from './conv.js';
 import { ToneDetector } from './detector.js';
-import { parseInfoBits } from './framing.js';
+import { decodeTieredFrame, parseInfoBits } from './framing.js';
 import { hammingDecode } from './hamming.js';
-import { deinterleave } from './interleave.js';
+import { deinterleave, INTERLEAVER_WIDTH } from './interleave.js';
 
 export type RxState = 'SEARCH' | 'SYNC' | 'DATA';
 export type LogKind = 'info' | 'corr' | 'fail';
@@ -30,6 +30,8 @@ export interface ReceiverOptions {
   interleaverWidth?: number;
   rate?: CodeRate;
   combineRepeats?: boolean;
+  /** Set for tiled chat frames: tries every payload length up to this ceiling against CRC-16. */
+  maxPayloadBytes?: number;
 }
 
 export class Receiver {
@@ -58,6 +60,7 @@ export class Receiver {
   private readonly interleaverWidth?: number;
   private readonly rate: CodeRate;
   private readonly combineRepeats: boolean;
+  private readonly maxPayloadBytes?: number;
 
   constructor(
     baud: number,
@@ -70,6 +73,7 @@ export class Receiver {
     this.interleaverWidth = opts.interleaverWidth;
     this.rate = opts.rate ?? 2;
     this.combineRepeats = opts.combineRepeats ?? true;
+    this.maxPayloadBytes = opts.maxPayloadBytes;
     this.detector = new ToneDetector(sampleRate);
     this.setBaud(baud);
   }
@@ -201,9 +205,18 @@ export class Receiver {
   }
 
   private decodeSoft(soft: Float64Array): boolean {
-    const coded = deinterleave(soft, this.interleaverWidth);
-    const frame = parseInfoBits(viterbiDecode(coded, this.rate));
-    if (!frame.ok || !frame.data) return false;
+    const frame =
+      this.maxPayloadBytes !== undefined
+        ? decodeTieredFrame(soft, {
+            interleaverWidth: this.interleaverWidth ?? INTERLEAVER_WIDTH,
+            rate: this.rate,
+            maxPayloadBytes: this.maxPayloadBytes,
+          })
+        : (() => {
+            const single = parseInfoBits(viterbiDecode(deinterleave(soft, this.interleaverWidth), this.rate));
+            return single.ok ? single : undefined;
+          })();
+    if (!frame || !frame.data) return false;
     for (const byte of frame.data) this.cb.onChar?.(String.fromCharCode(byte));
     return true;
   }

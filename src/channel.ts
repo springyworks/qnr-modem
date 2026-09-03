@@ -12,6 +12,7 @@ export const ITU_PROFILES: Record<string, WattersonProfile> = {
   good: { name: 'CCIR Good', delayMs: 0.5, dopplerHz: 0.1 },
   moderate: { name: 'CCIR Moderate', delayMs: 1.0, dopplerHz: 0.5 },
   poor: { name: 'CCIR Poor', delayMs: 2.0, dopplerHz: 1.0 },
+  worst: { name: 'CCIR Worst', delayMs: 4.0, dopplerHz: 2.0 },
 };
 
 export interface ChannelOptions {
