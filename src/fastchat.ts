@@ -14,6 +14,7 @@ import {
   FRAME_OPTIONS,
   RATE,
 } from './protocol.js';
+import { QNR_PAGE_URL, qrHalfBlockArt } from './qr.js';
 
 const CHUNK_OPTS: ChunkOptions = {
   baud: BAUD,
@@ -183,11 +184,15 @@ export function runFastChat(opts: FastChatOptions): void {
 
   lineReader = readline.createInterface({ input: process.stdin, output: process.stdout, prompt: '> ' });
   log(
-    `fastchat  ${identity.label}  ${(CHUNK_SLOT_SAMPLES / SAMPLE_RATE).toFixed(2)}s grid, ${CHUNKS}-way incremental redundancy  -  type a message and press enter, Ctrl-D to quit`
+    `fastchat  ${identity.label}  ${(CHUNK_SLOT_SAMPLES / SAMPLE_RATE).toFixed(2)}s grid, ${CHUNKS}-way incremental redundancy  -  type a message and press enter, '/qr' for a scannable link, Ctrl-D to quit`
   );
   lineReader.prompt();
   lineReader.on('line', (line) => {
-    queueMessage(line);
+    if (line.trim() === '/qr') {
+      console.log(`${qrHalfBlockArt(QNR_PAGE_URL).join('\n')}\n\n${QNR_PAGE_URL}`);
+    } else {
+      queueMessage(line);
+    }
     lineReader?.prompt();
   });
   lineReader.on('close', stop);

@@ -78,6 +78,8 @@ Messages are plain chat: up to ${CHAT_PAYLOAD_BYTES} printable ASCII characters 
 no per-character mode, no ACK handshake, no automatic retry. A typed line is sent as
 soon as Enter is pressed (Shift+Enter inserts a line break instead in the TUI),
 repeated back-to-back as many times as the dashboard's FEC strength control says.
+Type '/qr' at the line prompt (or press ^Q in the TUI) for a scannable QR code linking
+to the project's web station.
 
 Test-signal options for tx (both to file and to the air):
   --snr=<dB>                  add noise at this SNR, 3 kHz reference, measured

@@ -23,6 +23,7 @@ import {
 } from './protocol.js';
 import { Receiver } from './rx.js';
 import { modulateChatMessage } from './tx.js';
+import { QNR_PAGE_URL, qrHalfBlockArt } from './qr.js';
 
 /**
  * Browser-facing facade. Imports only the pure-DSP modules -- nothing that touches
@@ -46,6 +47,14 @@ export const info = {
   summary: summary(),
   profiles: Object.keys(ITU_PROFILES),
 };
+
+/** The published GitHub Pages URL for this page, so the terminal's `qr` command doesn't hard-code it twice. */
+export const pageUrl = QNR_PAGE_URL;
+
+/** A real, scannable QR code for `text` (default: this page's own URL), as terminal block-art lines. */
+export function qrLines(text: string = QNR_PAGE_URL): string[] {
+  return qrHalfBlockArt(text);
+}
 
 export const clean = (text: string): string => decodeChatMessage(encodeChatMessage(text)) ?? '';
 

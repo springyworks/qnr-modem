@@ -1,12 +1,13 @@
 import blessed from 'blessed';
 import type { ContinuousReceiverStatus } from './live.js';
 import { CHAT_PAYLOAD_BYTES } from './packet.js';
+import { QNR_PAGE_URL, qrHalfBlockArt } from './qr.js';
 
 const METER_WIDTH = 22;
 /** Terminals that support the "CSI u" / modifyOtherKeys encoding send one of these for Shift+Enter. */
 const SHIFT_ENTER_SEQUENCES = new Set(['\x1b[13;2u', '\x1b[27;2;13~']);
 const CHAT_LOG_LINES = 4;
-const CONTROL_ROW_COUNT = 5;
+const CONTROL_ROW_COUNT = 6;
 
 export interface TxDashboardState {
   message: string;
@@ -109,7 +110,7 @@ export class StationDashboard {
       top: 15,
       left: 0,
       width: '100%',
-      bottom: 13,
+      bottom: 14,
       border: 'line',
       tags: true,
       scrollback: 300,
@@ -144,7 +145,7 @@ export class StationDashboard {
       bottom: 5,
       left: 0,
       width: '100%',
-      height: 8,
+      height: 9,
       border: 'line',
       tags: true,
       mouse: true,
@@ -180,7 +181,7 @@ export class StationDashboard {
       align: 'center',
       tags: true,
       style: { fg: 'gray' },
-      content: '144-tone MFSK  |  Conv r1/3  |  CRC-16  |  fixed 8 Bd  |  Tab/^L controls  |  ^F FEC  ^G Off-grid  ^T Tune  ^N SNR  ^P HF  |  ^X/^C quit',
+      content: '144-tone MFSK  |  Conv r1/3  |  CRC-16  |  fixed 8 Bd  |  Tab/^L controls  |  ^F FEC  ^G Off-grid  ^T Tune  ^N SNR  ^P HF  ^Q QR  |  ^X/^C quit',
     });
 
     this.screen.key(['C-c', 'C-x'], () => this.handlers.onQuit());
@@ -190,6 +191,7 @@ export class StationDashboard {
     this.screen.key(['C-t'], () => this.activateControl(2));
     this.screen.key(['C-n'], () => this.activateControl(3));
     this.screen.key(['C-p'], () => this.activateControl(4));
+    this.screen.key(['C-q'], () => this.activateControl(5));
     this.screen.key(['escape'], () => {
       if (this.controlsFocused) {
         this.toggleControlsFocus();
@@ -334,13 +336,45 @@ export class StationDashboard {
     this.render();
   }
 
-  /** Rows 0-2 as before; row 3 cycles TX test SNR, row 4 cycles the Watterson HF profile. */
+  /** Rows 0-2 as before; row 3 cycles TX test SNR, row 4 cycles the Watterson HF profile, row 5
+   * pops up a scannable QR code linking to the project's web station. */
   private activateControl(index: number): void {
     if (index === 0) this.handlers.onFecLevel(this.stepFec(1));
     else if (index === 1) this.handlers.onOffGrid(!this.offGrid);
     else if (index === 2) this.handlers.onTune();
     else if (index === 3) this.handlers.onTxSnrCycle(1);
     else if (index === 4) this.handlers.onTxProfileCycle(1);
+    else if (index === 5) this.showQrPopup();
+  }
+
+  /** Modal box with a real scannable QR code (Unicode half-blocks) for QNR_PAGE_URL; any key or
+   * click dismisses it. */
+  private showQrPopup(): void {
+    const art = qrHalfBlockArt(QNR_PAGE_URL);
+    const width = Math.max(art[0]?.length ?? 0, QNR_PAGE_URL.length) + 4;
+    const height = art.length + 4;
+    const popup = blessed.box({
+      parent: this.screen,
+      label: ' QNR-144 web station (scan or visit) ',
+      top: 'center',
+      left: 'center',
+      width,
+      height,
+      border: 'line',
+      tags: false,
+      mouse: true,
+      clickable: true,
+      style: { border: { fg: 'cyan' }, bg: 'white', fg: 'black' },
+      content: `${art.join('\n')}\n\n${QNR_PAGE_URL}`,
+    });
+    const close = (): void => {
+      popup.destroy();
+      this.render();
+    };
+    popup.on('click', close);
+    popup.key(['escape', 'enter', 'space', 'q'], close);
+    popup.focus();
+    this.render();
   }
 
   /** Doubling steps (1,2,4,8...) instead of +1 each press -- reaching a WSPR-grade repeat count
@@ -397,6 +431,7 @@ export class StationDashboard {
       ` Tune test tone  1 kHz, 0.5 s   (^T plays)`,
       ` TX test SNR     ${snrLabel}   (^N cycles, \u2190/\u2192 when focused)`,
       ` Watterson HF    ${profileLabel}   (^P cycles, \u2190/\u2192 when focused)`,
+      ` Show QR code    web station URL   (^Q shows)`,
     ];
     rows.forEach((content, index) => {
       const selected = this.controlsFocused && index === this.controlSelected;

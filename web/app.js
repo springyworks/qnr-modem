@@ -462,6 +462,13 @@
 
   def('clear', 'clear the screen', function () { outEl.textContent = ''; });
 
+  def('qr', 'show a scannable QR code for this page\'s URL', function () {
+    write('');
+    M.qrLines().forEach(function (l) { write(l, 'c-cyan'); });
+    write('  ' + M.pageUrl, 'c-dim');
+    write('');
+  });
+
   def('devices', 'list audio inputs and outputs', async function () {
     if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) throw new Error('no device API in this browser');
     var list = await navigator.mediaDevices.enumerateDevices();

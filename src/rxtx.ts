@@ -6,6 +6,7 @@ import { ContinuousReceiver, type HeardFrame } from './live.js';
 import { CHAT_PAYLOAD_BYTES, decodeChatMessage, encodeChatMessage } from './packet.js';
 import { liveWorkerCount } from './pool.js';
 import { AMPLITUDE, BAUD, DATA_SYMBOLS, FRAME_OPTIONS, GUARD_SAMPLES, LIVE_DECODE_SAMPLES, msUntilPhase, PERIOD_SAMPLES, REPEATS } from './protocol.js';
+import { QNR_PAGE_URL, qrHalfBlockArt } from './qr.js';
 import { StationDashboard, type TxDashboardState } from './stationUi.js';
 import { modulateChatMessage } from './tx.js';
 
@@ -311,10 +312,14 @@ export function runRxTx(opts: RxTxOptions): void {
   if (opts.message) queueMessage(opts.message);
 
   if (lineReader) {
-    log(`rxtx  ${identity.label}  ${jobs} decoder threads  -  type a message and press enter, Ctrl-D to quit`);
+    log(`rxtx  ${identity.label}  ${jobs} decoder threads  -  type a message and press enter, '/qr' for a scannable link, Ctrl-D to quit`);
     lineReader.prompt();
     lineReader.on('line', (line) => {
-      queueMessage(line);
+      if (line.trim() === '/qr') {
+        console.log(`${qrHalfBlockArt(QNR_PAGE_URL).join('\n')}\n\n${QNR_PAGE_URL}`);
+      } else {
+        queueMessage(line);
+      }
       lineReader?.prompt();
     });
     lineReader.on('close', stop);
