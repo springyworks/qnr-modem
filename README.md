@@ -16,6 +16,20 @@ averaging over the gaps would make the figure look better the longer they get.
 There are no modem options. Every parameter is frozen at the value that won its
 measurement sweep, so any two copies of this program can always talk to each other.
 
+It also runs **entirely in a browser** as a single self-contained HTML file — see
+[The web station](#the-web-station-github-pages).
+
+> **Known gap: the burst is 9.9 s, not the intended 5 s.**
+> `npm run requirements` checks every stated on-air constraint against what the code
+> actually builds. Ten of twelve pass (144 tones, 8 Bd, 2.51 kHz, constant envelope,
+> 3.01 dB PAPR, phase continuity, tx/rx alternation). The burst and slot length do
+> not: a 16-byte payload at rate 1/3 needs 79 symbols, which is 9.9 s at 8 Bd.
+> A 5 s burst is 40 symbols, and would carry only 4 bytes at the current rate and
+> framing (6 bytes with a 4-bit length field, 11 bytes at rate 1/2 with less coding
+> gain). That trade is a protocol break which moves every measured sensitivity
+> figure, so it is left as an explicit decision rather than applied silently.
+
+
 ---
 
 ## Install
@@ -46,29 +60,61 @@ prefix (`npm config set prefix ~/.local` and make sure `~/.local/bin` is on your
 
 ## Use
 
+**The station is `qnr -tui`.** Everything else is for testing, scripting and
+headless operation.
+
 ```bash
-qnr tx "CQ QNR"                # transmit one chat message through the default audio output
-qnr tx "HELLO" -o out.wav      # write a chat transmission to a WAV file
-qnr rx                         # listen on the default audio input
-qnr rx -i in.wav               # decode a WAV file
-qnr rx -i in.wav --jobs=4      # cap the decoder to 4 threads
-qnr                            # listen continuously, ready to send chat messages
-qnr "HELLO"                    # queue one message and listen at the same time
-qnr -tui                       # full-screen chat station dashboard
+qnr -tui                       # the station: full-screen dashboard, tx and rx together
+qnr -tui "CQ QNR"              # same, with one message already queued
 ```
 
-There is no `rxtx` subcommand: simultaneous transmit + continuous receive is what
-plain `qnr` *is*, so it needs no argument to select it.
+The other subcommands are deliberately plain and pipe-friendly:
 
-The receiver uses every core but one, so the machine stays usable while it works.
-`--jobs=N` overrides that. Input WAVs are accepted at any sample rate and in 8/16/24/32-bit
-PCM or float, and are resampled to 48 kHz internally.
+```bash
+qnr                            # same station, but an append-only line prompt (no TUI)
+qnr tx "CQ QNR"                # one-shot transmit only, no listening
+qnr tx "HELLO" -o out.wav      # render a transmission to a WAV file
+qnr rx                         # listen only, never transmits
+qnr rx -i in.wav               # decode a recording (this is the deep/weak-signal path)
+qnr rx -i in.wav --jobs=4      # cap the decoder to 4 threads
+qnr fastchat "CQ"              # experimental 3 s incremental-redundancy grid
+```
+
+There is no `rxtx` subcommand: transmitting and receiving together is what plain
+`qnr` *is*, so it needs no argument to select it.
+
+### Threads, and why live is not the deepest decode
+
+A live station leaves three cores free so the audio never breaks up; an offline
+decode uses every core but one. `--jobs=N` overrides either.
+
+That is also why a **live** station folds only
+[`LIVE_FOLD_REPEATS`](src/protocol.ts) periods deep, while a transmitter may send up
+to `REPEATS` (60). A live fold has to finish inside one period or it starves the
+thread feeding PipeWire and the outgoing tone stutters. To get the full
+many-repeat weak-signal gain, record the audio and decode it with `qnr rx -i`,
+which may take as long as it likes because nothing is being transmitted.
+
+Input WAVs are accepted at any sample rate and in 8/16/24/32-bit PCM or float, and are
+resampled to 48 kHz internally.
 
 Without linking, replace `qnr` with `node dist/cli.js`, or use the npm scripts:
 
 ```bash
-npm run tx -- "C"
+npm run tui
+npm run tx -- "CQ QNR"
 npm run rx
+```
+
+### Checking the build
+
+```bash
+npm run selftest       # FEC, framing and the full modem chain, no hardware
+npm run integration    # worker-backed two-station folded decode
+npm run fasttest       # the 3 s chunked grid
+npm run requirements   # stated on-air requirements vs. what the code actually builds
+npm run snrprobe       # measured fast-chat and weak-signal SNR, real tx/rx pipeline
+npm run wsprprobe      # repeats needed vs SNR, down to the decoding floor
 ```
 
 Audio routing is deliberately **not** handled by this program. Start it, then point
@@ -83,10 +129,11 @@ NAME
        qnr - 144-tone MFSK weak-signal HF chat modem
 
 SYNOPSIS
-       qnr tx MESSAGE [-o FILE] [--snr=DB --profile=NAME [--seed=N]] [--jobs=N]
+       qnr [MESSAGE] [-tui] [--jobs=N]
+       qnr tx MESSAGE [-o FILE] [--snr=DB [--profile=NAME] [--seed=N]]
        qnr rx [-i FILE] [--jobs=N]
        qnr fastchat [MESSAGE]
-       qnr [MESSAGE] [-tui] [--jobs=N]
+       qnr -h | --help
 
 DESCRIPTION
        qnr transmits and receives a fixed-format 144-tone MFSK frame over a
@@ -158,9 +205,10 @@ OPTIONS
               --snr/--profile test signal is exactly reproducible. Default 1.
 
        --jobs=N
-              (tx, rx and the default station) Worker thread count for the
-              decoder search. Default is cores - 1, so the machine stays
-              usable while it decodes.
+              Worker thread count for the decoder search. Default is
+              cores - 1 for an offline decode, and cores - 3 for a live
+              station, which needs spare cores to keep feeding audio to
+              PipeWire without the transmitted tone breaking up.
 
        -tui, --tui
               (default station only) Full-screen Blessed station console with
@@ -226,6 +274,43 @@ SEE ALSO
        time-slots and multi-station reception), src/protocol.ts (the frozen
        parameters), src/selftest.ts (offline conformance check).
 ```
+
+## Operating the station (`qnr -tui`)
+
+```
+ RX / DECODER                     TX / SCHEDULER
+ IN      |####------|             OUT     |########--|
+ RING    |#########-|             REPEAT  |###-------|  3/8
+ FOLD    |####------|  3/4 raw    QUEUE   |##--------|  2
+ DIRECT  SEARCH                   RADIO   KEYED
+ TEXT    HELLO WOR                STATUS  burst 3/8 - "HELLO WORLD"
+```
+
+Type up to 16 printable ASCII characters and press **Enter** to send. Shift+Enter
+inserts a newline where the terminal supports it.
+
+| Key | Control |
+|-----|---------|
+| `Enter` | send the typed message |
+| `Tab` / `^L` | move focus between the message box and the controls pane |
+| `Tab` / `F1` | open the menu (F1 alone is unreliable under tmux and some window managers) |
+| `^F` | FEC strength: how many repeats to send, stepping 1, 2, 4, 8, 16, 32, 60 |
+| `^G` | off-grid mode: transmit immediately instead of waiting for the world-time slot |
+| `^T` | 0.5 s 1 kHz test tone, to check audio routing |
+| `^N` / `^P` | simulated TX SNR / Watterson fading, for testing without a radio |
+| `←` `→` | adjust the selected control when the controls pane has focus |
+| `x` / `Esc` | leave the menu |
+
+The focused pane is outlined in green. Mouse clicks select a pane and activate menu
+items, if the terminal passes mouse events through (`set -g mouse on` under tmux).
+
+**FEC strength is not transmitted.** The receiver folds however many repeats it
+happens to hear, so the two stations never have to agree on a count: raise it for a
+distant station, drop it to 1 or 2 for a quick local exchange.
+
+**Off-grid mode** is for good-SNR back-and-forth. It keys up the moment you press
+Enter rather than waiting for the shared world-time slot, so it gives up repeat-fold
+gain in exchange for immediacy. Leave it off for weak signals.
 
 ### The audio tell-tale
 
@@ -475,27 +560,77 @@ listening gaps; see the note above.
 
 ---
 
+## The web station (GitHub Pages)
+
+`docs/index.html` is the whole modem as **one self-contained HTML file** — no
+bundler at runtime, no CDN, no network requests, nothing uploaded. It runs the same
+TypeScript DSP as the command-line program, compiled to a browser build and inlined.
+
+```bash
+npm run build:web       # -> docs/index.html
+```
+
+Publish it by pointing GitHub Pages at the `docs/` folder on the default branch
+(Settings → Pages → Source: *Deploy from a branch*, folder `/docs`). Opening the
+file directly with `file://` works too.
+
+It gives you a terminal with `help`, `info`, `selftest`, `sim`, `devices`, `mic`,
+`tx`, `tone` and `clear`. `selftest` and `sim` prove the DSP end-to-end in the
+browser — `sim -18 poor` decodes a signal 18 dB under the noise through simulated
+CCIR Poor fading, matching the command-line result.
+
+The folded search runs in a Web Worker built from the same inlined source, so a
+long decode never freezes the page.
+
+### Browser audio, honestly
+
+Audio is the hard part of a browser modem, and the limits are real:
+
+| | Chrome / Edge | Firefox | Safari |
+|---|---|---|---|
+| Microphone capture | yes | yes | yes |
+| Choosing the **input** device | yes | yes | yes |
+| Choosing the **output** device from the page | yes (`setSinkId`) | no | no |
+| Sample-rate control | usually honours 48 kHz | usually | often resamples |
+
+* Echo cancellation, noise suppression and auto gain are all explicitly disabled —
+  every one of them destroys a weak MFSK signal.
+* Where the page cannot choose an output device, pick it in the OS mixer instead.
+* A page cannot open your radio's PTT. For real transmit, route the tab's audio to
+  the rig with the OS mixer, or use the command-line station.
+* Browsers require a user gesture before audio starts, so the first `tx` or
+  `mic on` must come from a click or keypress.
+
+The command-line station remains the better choice for real weak-signal work: it is
+multi-threaded, it can fold far more deeply, and PipeWire routing is far more
+predictable than a browser's.
+
+---
+
 ## Repository layout
 
 | File | Role |
 |------|------|
-| `src/cli.ts` | the user-facing program |
-| `src/rxtx.ts` | simultaneous transmit + continuous receive; the default station when `qnr` runs with no subcommand |
+| `src/cli.ts` | argument parsing and the headless commands |
+| `src/rxtx.ts` | the station: transmit + receive together, `qnr` and `qnr -tui` |
+| `src/stationUi.ts` | the Blessed dashboard for `-tui` |
 | `src/protocol.ts` | frozen parameters, the single source of truth |
 | `src/tx.ts` | framing, interleaving, continuous-phase modulator |
+| `src/synclayout.ts` | where the sync markers sit inside a burst |
 | `src/fold.ts` | repeat correlation receiver (folding + LLR combining) |
-| `src/rx.ts` | streaming single-burst receiver, used by the TUI |
+| `src/search.ts` | multi-threaded tuning/drift search around `fold.ts` |
+| `src/rx.ts` | streaming single-burst receiver for loud, off-grid signals |
+| `src/live.ts` | the always-on receive loop both live modes share |
 | `src/conv.ts` | convolutional encoder and soft-decision Viterbi |
 | `src/detector.ts` | Goertzel bank over the 144 tones |
 | `src/channel.ts` | Watterson HF channel simulator |
 | `src/audio.ts` | PipeWire capture and playback |
-| `src/selftest.ts` | end-to-end tests, no hardware needed |
-| `src/foldExperiment.ts` | parameter sweeps across all cores |
-
-```bash
-npm run selftest        # verifies FEC and the full modem chain
-node dist/foldExperiment.js --trials=24
-```
+| `src/chunked.ts`, `src/fastchat.ts` | experimental 3 s incremental-redundancy grid |
+| `src/webmodem.ts` | browser-safe facade bundled into `docs/index.html` |
+| `web/`, `tools/buildWeb.mjs` | the single-file web build |
+| `src/selftest.ts`, `src/integration.ts`, `src/fastSelfTest.ts` | tests, no hardware needed |
+| `src/requirements.ts` | asserts the stated on-air requirements against the build |
+| `src/snrProbe.ts`, `src/wsprProbe.ts` | SNR measurement through the real pipeline |
 
 ---
 

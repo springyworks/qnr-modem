@@ -65,6 +65,23 @@ export const GAP_SAMPLES = PERIOD_SAMPLES - BURST_SAMPLES;
 export const GAP_SECONDS = GAP_SAMPLES / SAMPLE_RATE;
 export const SCHEDULE_SAMPLES = REPEATS * PERIOD_SAMPLES;
 
+/**
+ * How deep a *live* station folds. The transmit ceiling (`REPEATS`) may be far larger, but a
+ * live receiver has to finish one fold inside a single decode cycle: the search saturates the
+ * whole worker pool, and if it overruns, the main thread stops feeding PipeWire and the
+ * outgoing audio breaks up. Folding ~28 minutes of ring every 14 s did exactly that. Deep,
+ * WSPR-style accumulation belongs in the offline `qnr rx -i file.wav` path, which may take as
+ * long as it likes because nothing is being transmitted while it runs.
+ *
+ * Measured on 12 cores / 9 live worker threads, worst case (idle noise, so no early exit):
+ * depth 1 -> 11.6 s, depth 2 -> 14.5 s, depth 4 -> 20.4 s. One decode per period gives a
+ * 27.8 s budget, so depth 4 fits with headroom while still buying real repeat gain.
+ */
+export const LIVE_FOLD_REPEATS = 4;
+export const LIVE_RING_SAMPLES = (LIVE_FOLD_REPEATS + 1) * PERIOD_SAMPLES;
+/** Live redecode cadence: one attempt per period, which is one attempt per transmitted burst. */
+export const LIVE_DECODE_SAMPLES = PERIOD_SAMPLES;
+
 export const DECODE_OPTIONS: FoldOptions = {
   baud: BAUD,
   periodSamples: PERIOD_SAMPLES,

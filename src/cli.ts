@@ -5,7 +5,7 @@ import { ITU_PROFILES, applyChannel, meanPower, type WattersonProfile } from './
 import { SAMPLE_RATE } from './config.js';
 import { ContinuousReceiver, laneForPhase, type HeardFrame } from './live.js';
 import { CHAT_PAYLOAD_BYTES, decodeChatMessage, encodeChatMessage } from './packet.js';
-import { workerCount } from './pool.js';
+import { liveWorkerCount, workerCount } from './pool.js';
 import { resample } from './resample.js';
 import { DecodeSearch, type SearchResult } from './search.js';
 import { OFFSET_SPAN_HZ } from './tune.js';
@@ -19,6 +19,8 @@ import {
   DECODE_OPTIONS,
   FRAME_OPTIONS,
   GUARD_SAMPLES,
+  LIVE_DECODE_SAMPLES,
+  LIVE_FOLD_REPEATS,
   PERIOD_SAMPLES,
   REPEATS,
   SLOT_SAMPLES,
@@ -30,7 +32,7 @@ import { modulateChatMessage } from './tx.js';
 import { readWav, writeWav16 } from './wav.js';
 
 const BAR_WIDTH = 32;
-const SLOT_MS = (SLOT_SAMPLES / SAMPLE_RATE) * 1000;
+const DECODE_MS = (LIVE_DECODE_SAMPLES / SAMPLE_RATE) * 1000;
 
 /** Channel simulation for making test material; `none` is AWGN only. */
 const PROFILES: Record<string, WattersonProfile | null> = { none: null, ...ITU_PROFILES };
@@ -59,14 +61,18 @@ function rmsOf(block: Float32Array): number {
 function usage(): void {
   console.log(`qnr - 144-tone MFSK weak signal modem
 
-  qnr                          listen continuously, ready to send chat messages
-  qnr "MESSAGE"                queue one chat message and keep listening at the same time
-  qnr -tui                     same, with the mouse-aware station dashboard
-  qnr tx "MESSAGE"             one-shot transmit only, through the default audio output
+The station:
+  qnr -tui                     the station: full-screen dashboard, tx and rx together
+  qnr -tui "MESSAGE"           same, with one message already queued
+
+Headless and testing:
+  qnr                          the same station on a plain line prompt, no TUI
+  qnr "MESSAGE"                queue one chat message and keep listening
+  qnr tx "MESSAGE"             one-shot transmit only, never listens
   qnr tx "MESSAGE" -o out.wav  one-shot transmit, written to a WAV file instead
-  qnr rx                       listen only, no ability to send
-  qnr rx -i in.wav             decode a WAV file
-  qnr fastchat ["MESSAGE"]     3-second-grid incremental-redundancy chat (see below)
+  qnr rx                       listen only, never transmits
+  qnr rx -i in.wav             decode a recording (the deep weak-signal path)
+  qnr fastchat ["MESSAGE"]     experimental 3-second incremental-redundancy grid
 
 Messages are plain chat: up to ${CHAT_PAYLOAD_BYTES} printable ASCII characters per frame,
 no per-character mode, no ACK handshake, no automatic retry. A typed line is sent as
@@ -78,12 +84,17 @@ Test-signal options for tx (both to file and to the air):
                               while transmitting so gaps do not flatter it
   --profile=<name>            fading channel: ${Object.keys(PROFILES).join(', ')}
   --seed=<n>                  repeatable channel realisation (default 1)
-  --jobs=N                    worker threads (default: cores - 1)
+  --jobs=N                    decoder threads (default: cores-1 offline, cores-3 live)
 
 Examples:
-  qnr "CQ CQ" -tui
+  qnr -tui "CQ CQ"
   qnr tx "CQ CQ" -o weak.wav --snr=-20 --profile=poor
-  qnr fastchat "CQ CQ"
+  qnr rx -i weak.wav
+
+A live station folds ${LIVE_FOLD_REPEATS} repeats deep so a fold always finishes inside one period;
+overrunning starves the audio and breaks up the transmitted tone. A transmitter may
+send up to ${REPEATS} repeats, so to use all of that gain, record the audio and decode it
+offline with 'qnr rx -i file.wav', which has no real-time deadline.
 
 qnr fastchat: the same chat payload and conv+Viterbi+CRC-16 pipeline as the default
 station, but the codeword is striped into ${CHUNKS} equal chunks and sent as a repeating
@@ -218,7 +229,7 @@ async function decodeFile(file: string): Promise<void> {
 }
 
 function listen(): void {
-  const jobs = workerCount();
+  const jobs = liveWorkerCount();
   const identity = createAudioIdentity();
   const receiver = new ContinuousReceiver(
     {
@@ -251,7 +262,7 @@ function listen(): void {
     process.stdout.write(`\r  IN   ${levelBar(peak)}  buffer ${status.readyPercent.toFixed(0)}%  ${activity}  `);
   }, 200);
 
-  const attempt = setInterval(() => void receiver.decode(), SLOT_MS);
+  const attempt = setInterval(() => void receiver.decode(), DECODE_MS);
 
   const stop = (): void => {
     clearInterval(meter);

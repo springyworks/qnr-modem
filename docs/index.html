@@ -1,0 +1,2276 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>QNR-144 &mdash; 144-tone MFSK weak-signal modem</title>
+<meta name="description" content="QNR-144: a 144-tone MFSK weak-signal HF chat modem running entirely in the browser.">
+<style>:root {
+  --bg: #0b0f12;
+  --panel: #11171c;
+  --edge: #1e2a33;
+  --fg: #cfd8dc;
+  --dim: #6b7f8a;
+  --green: #43d17c;
+  --cyan: #4fd0e7;
+  --amber: #e8b64c;
+  --red: #e8615a;
+  --mono: ui-monospace, "SF Mono", "JetBrains Mono", "DejaVu Sans Mono", Menlo, Consolas, monospace;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--mono);
+  font-size: 14px;
+}
+
+#app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 12px;
+  gap: 10px;
+}
+
+header {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+h1 {
+  margin: 0;
+  font-size: 20px;
+  letter-spacing: 0.06em;
+  color: var(--green);
+}
+
+.sub { color: var(--dim); font-size: 12px; }
+.spacer { flex: 1; }
+
+.pill {
+  border: 1px solid var(--edge);
+  border-radius: 999px;
+  padding: 2px 10px;
+  font-size: 11px;
+  color: var(--dim);
+  white-space: nowrap;
+}
+
+#meters {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  background: var(--panel);
+  border: 1px solid var(--edge);
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+
+.meter { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--dim); }
+.meter label { width: 26px; }
+.meter span { width: 62px; text-align: right; color: var(--fg); }
+
+.bar {
+  width: 150px;
+  height: 9px;
+  background: #0a0e11;
+  border: 1px solid var(--edge);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.bar i {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: linear-gradient(90deg, var(--green), var(--amber) 78%, var(--red));
+  transition: width 90ms linear;
+}
+
+#spectrum {
+  flex: 1;
+  min-width: 220px;
+  height: 44px;
+  background: #070a0c;
+  border: 1px solid var(--edge);
+  border-radius: 3px;
+  image-rendering: pixelated;
+}
+
+#term {
+  flex: 1;
+  min-height: 220px;
+  overflow-y: auto;
+  background: var(--panel);
+  border: 1px solid var(--edge);
+  border-radius: 6px;
+  padding: 10px 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.45;
+  outline: none;
+}
+
+#term:focus-within, #term:focus { border-color: #2f4a5a; }
+
+#out .l { display: block; }
+.c-dim { color: var(--dim); }
+.c-green { color: var(--green); }
+.c-cyan { color: var(--cyan); }
+.c-amber { color: var(--amber); }
+.c-red { color: var(--red); }
+.c-rx { color: var(--green); font-weight: 600; }
+
+#line { display: flex; gap: 6px; align-items: baseline; }
+#prompt { color: var(--cyan); flex: none; }
+#input { white-space: pre-wrap; word-break: break-word; }
+
+#cursor { color: var(--green); animation: blink 1.05s steps(1) infinite; }
+@keyframes blink { 50% { opacity: 0; } }
+
+footer { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+
+button {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--fg);
+  background: var(--panel);
+  border: 1px solid var(--edge);
+  border-radius: 4px;
+  padding: 4px 9px;
+  cursor: pointer;
+}
+
+button:hover { border-color: var(--green); color: var(--green); }
+
+.hint { color: var(--dim); font-size: 11px; }
+kbd {
+  border: 1px solid var(--edge);
+  border-bottom-width: 2px;
+  border-radius: 3px;
+  padding: 0 4px;
+  font-size: 10px;
+}
+
+@media (max-width: 640px) {
+  .bar { width: 90px; }
+  #spectrum { min-width: 140px; }
+}
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <h1>QNR&#8209;144</h1>
+    <span class="sub">144&#8209;tone MFSK weak&#8209;signal chat modem &mdash; running in your browser</span>
+    <span class="spacer"></span>
+    <span id="ctxrate" class="pill" title="Audio context sample rate">audio: idle</span>
+  </header>
+
+  <div id="meters">
+    <div class="meter"><label>IN</label><div class="bar"><i id="inbar"></i></div><span id="indb">&mdash;</span></div>
+    <div class="meter"><label>OUT</label><div class="bar"><i id="outbar"></i></div><span id="outdb">&mdash;</span></div>
+    <canvas id="spectrum" width="512" height="64" title="Received tone spectrum"></canvas>
+  </div>
+
+  <div id="term" tabindex="0" role="log" aria-label="QNR terminal">
+    <div id="out"></div>
+    <div id="line"><span id="prompt">qnr&gt;</span><span id="input"></span><span id="cursor">&#9608;</span></div>
+  </div>
+
+  <footer>
+    <button data-cmd="help">help</button>
+    <button data-cmd="info">info</button>
+    <button data-cmd="devices">devices</button>
+    <button data-cmd="mic on">mic on</button>
+    <button data-cmd="selftest">selftest</button>
+    <button data-cmd="sim -18 poor">sim -18 poor</button>
+    <span class="hint">click the terminal and type &mdash; <kbd>Tab</kbd> completes, <kbd>&uarr;</kbd> recalls</span>
+  </footer>
+</div>
+
+<!-- The modem is emitted as inert text so exactly one copy boots both the main thread and the
+     decode Worker, keeping the page a single self-contained file. -->
+<script type="text/plain" id="qnr-modem">
+(function () {
+  var __mods = Object.create(null);
+  var __cache = Object.create(null);
+  function __def(name, fn) { __mods[name] = fn; }
+  function __req(id) {
+    var name = String(id).replace(/^\.\//, '').replace(/\.js$/, '');
+    if (__cache[name]) return __cache[name].exports;
+    var fn = __mods[name];
+    if (!fn) throw new Error('module not bundled: ' + id);
+    var module = { exports: {} };
+    __cache[name] = module;
+    fn(module.exports, __req, module);
+    return module.exports;
+  }
+__def("channel", function (exports, require, module) {
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.ITU_PROFILES = void 0;
+exports.meanPower = meanPower;
+exports.applyChannel = applyChannel;
+const fft_js_1 = require("./fft.js");
+const rng_js_1 = require("./rng.js");
+/** ITU-R F.1487 mid-latitude reference channels. */
+exports.ITU_PROFILES = {
+    good: { name: 'CCIR Good', delayMs: 0.5, dopplerHz: 0.1 },
+    moderate: { name: 'CCIR Moderate', delayMs: 1.0, dopplerHz: 0.5 },
+    poor: { name: 'CCIR Poor', delayMs: 2.0, dopplerHz: 1.0 },
+    worst: { name: 'CCIR Worst', delayMs: 4.0, dopplerHz: 2.0 },
+};
+function analytic(signal) {
+    const n = (0, fft_js_1.nextPowerOfTwo)(signal.length);
+    const re = new Float64Array(n);
+    const im = new Float64Array(n);
+    re.set(signal);
+    (0, fft_js_1.fft)(re, im);
+    const half = n / 2;
+    for (let k = 1; k < half; k++) {
+        re[k] *= 2;
+        im[k] *= 2;
+    }
+    for (let k = half + 1; k < n; k++) {
+        re[k] = 0;
+        im[k] = 0;
+    }
+    (0, fft_js_1.fft)(re, im, true);
+    return { re, im };
+}
+/**
+ * Gaussian-shaped Doppler spectrum, generated at a low rate and interpolated,
+ * which is far cheaper than synthesising it at the audio sample rate.
+ */
+function fadingProcess(samples, sampleRate, dopplerHz, rand) {
+    const fadeRate = 64;
+    const count = (0, fft_js_1.nextPowerOfTwo)(Math.ceil((samples / sampleRate) * fadeRate) + 4);
+    const re = new Float64Array(count);
+    const im = new Float64Array(count);
+    for (let i = 0; i < count; i++) {
+        re[i] = (0, rng_js_1.gaussian)(rand);
+        im[i] = (0, rng_js_1.gaussian)(rand);
+    }
+    (0, fft_js_1.fft)(re, im);
+    const sigma = Math.max(dopplerHz / 2, 1e-6);
+    for (let k = 0; k < count; k++) {
+        const f = (k <= count / 2 ? k : k - count) * (fadeRate / count);
+        const h = Math.exp(-(f * f) / (2 * sigma * sigma));
+        re[k] *= h;
+        im[k] *= h;
+    }
+    (0, fft_js_1.fft)(re, im, true);
+    let power = 0;
+    for (let i = 0; i < count; i++)
+        power += re[i] * re[i] + im[i] * im[i];
+    const norm = Math.sqrt(count / Math.max(power, 1e-30));
+    for (let i = 0; i < count; i++) {
+        re[i] *= norm;
+        im[i] *= norm;
+    }
+    const outRe = new Float64Array(samples);
+    const outIm = new Float64Array(samples);
+    const step = fadeRate / sampleRate;
+    for (let n = 0; n < samples; n++) {
+        const x = n * step;
+        const i0 = Math.min(Math.floor(x), count - 2);
+        const frac = x - i0;
+        outRe[n] = re[i0] * (1 - frac) + re[i0 + 1] * frac;
+        outIm[n] = im[i0] * (1 - frac) + im[i0 + 1] * frac;
+    }
+    return { re: outRe, im: outIm };
+}
+function meanPower(signal) {
+    let power = 0;
+    for (const v of signal)
+        power += v * v;
+    return power / Math.max(signal.length, 1);
+}
+function applyChannel(signal, opts) {
+    const { sampleRate, snrDb, profile = null, seed = 1, noiseBandwidthHz = 3000, referencePower } = opts;
+    const rand = (0, rng_js_1.mulberry32)(seed);
+    const out = new Float32Array(signal.length);
+    if (!profile) {
+        out.set(signal);
+    }
+    else {
+        const { re, im } = analytic(signal);
+        const delay = Math.round((profile.delayMs / 1000) * sampleRate);
+        const p1 = fadingProcess(signal.length, sampleRate, profile.dopplerHz, rand);
+        const p2 = fadingProcess(signal.length, sampleRate, profile.dopplerHz, rand);
+        for (let n = 0; n < signal.length; n++) {
+            let acc = re[n] * p1.re[n] - im[n] * p1.im[n];
+            const d = n - delay;
+            if (d >= 0)
+                acc += re[d] * p2.re[n] - im[d] * p2.im[n];
+            out[n] = acc / Math.SQRT2;
+        }
+    }
+    let power = referencePower;
+    if (power === undefined) {
+        power = 0;
+        for (const v of out)
+            power += v * v;
+        power /= Math.max(out.length, 1);
+    }
+    const snrLinear = 10 ** (snrDb / 10);
+    const noiseVar = (power * (sampleRate / 2)) / (noiseBandwidthHz * snrLinear);
+    const noiseSigma = Math.sqrt(Math.max(noiseVar, 0));
+    for (let n = 0; n < out.length; n++)
+        out[n] += noiseSigma * (0, rng_js_1.gaussian)(rand);
+    return out;
+}
+
+});
+__def("config", function (exports, require, module) {
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.TONE_SPACING_HZ = exports.DEFAULT_FEC = exports.BITS_PER_SYMBOL = exports.DATA_TONES = exports.DEFAULT_SQUELCH_DB = exports.DEFAULT_BAUD = exports.PREAMBLE_PAIRS = exports.SYM_IDLE = exports.SYM_SYNC_2 = exports.SYM_SYNC_1 = exports.BASE_BIN = exports.NUM_TONES = exports.TONE_SPACING_BINS = exports.HZ_PER_BIN = exports.FFT_SIZE = exports.SAMPLE_RATE = void 0;
+exports.toneFreq = toneFreq;
+exports.symbolSamples = symbolSamples;
+/** Tone plan is kept bit-identical to the browser version so both ends interoperate. */
+exports.SAMPLE_RATE = 48000;
+exports.FFT_SIZE = 8192;
+exports.HZ_PER_BIN = exports.SAMPLE_RATE / exports.FFT_SIZE;
+exports.TONE_SPACING_BINS = 3;
+exports.NUM_TONES = 144;
+exports.BASE_BIN = Math.round(500 / exports.HZ_PER_BIN);
+exports.SYM_SYNC_1 = 130;
+exports.SYM_SYNC_2 = 140;
+exports.SYM_IDLE = 143;
+exports.PREAMBLE_PAIRS = 4;
+exports.DEFAULT_BAUD = 4;
+exports.DEFAULT_SQUELCH_DB = -65;
+/** Data rides on tones 0..127 so the sync/idle tones and the 144-tone melody stay unchanged. */
+exports.DATA_TONES = 128;
+exports.BITS_PER_SYMBOL = 7;
+exports.DEFAULT_FEC = 'conv';
+/** offsetHz shifts the whole comb to follow a mistuned transmitter or receiver. */
+function toneFreq(symbol, offsetHz = 0) {
+    return (exports.BASE_BIN + symbol * exports.TONE_SPACING_BINS) * exports.HZ_PER_BIN + offsetHz;
+}
+exports.TONE_SPACING_HZ = exports.TONE_SPACING_BINS * exports.HZ_PER_BIN;
+function symbolSamples(baud, sampleRate = exports.SAMPLE_RATE) {
+    return Math.round(sampleRate / baud);
+}
+
+});
+__def("conv", function (exports, require, module) {
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.TAIL_BITS = exports.CONSTRAINT_LENGTH = void 0;
+exports.convEncode = convEncode;
+exports.viterbiDecode = viterbiDecode;
+/** Convolutional codes with K=7. Rate 1/2 uses the classic NASA pair; rate 1/3 adds a third polynomial. */
+exports.CONSTRAINT_LENGTH = 7;
+exports.TAIL_BITS = exports.CONSTRAINT_LENGTH - 1;
+const STATES = 1 << exports.TAIL_BITS;
+const POLYS = {
+    2: [0o171, 0o133],
+    3: [0o133, 0o145, 0o175],
+};
+const parity = (v) => {
+    let x = v;
+    x ^= x >> 4;
+    x ^= x >> 2;
+    x ^= x >> 1;
+    return x & 1;
+};
+const cache = new Map();
+function trellis(rate) {
+    const hit = cache.get(rate);
+    if (hit)
+        return hit;
+    const polys = POLYS[rate];
+    const next = new Uint8Array(STATES * 2);
+    const outs = polys.map(() => new Uint8Array(STATES * 2));
+    for (let state = 0; state < STATES; state++) {
+        for (let bit = 0; bit < 2; bit++) {
+            const reg = ((state << 1) | bit) & 0x7f;
+            const i = state * 2 + bit;
+            next[i] = reg & (STATES - 1);
+            polys.forEach((poly, p) => {
+                outs[p][i] = parity(reg & poly);
+            });
+        }
+    }
+    const built = { n: polys.length, next, outs };
+    cache.set(rate, built);
+    return built;
+}
+function convEncode(bits, rate = 2) {
+    const { n, next, outs } = trellis(rate);
+    const out = new Uint8Array(bits.length * n);
+    let state = 0;
+    for (let i = 0; i < bits.length; i++) {
+        const idx = state * 2 + (bits[i] & 1);
+        for (let p = 0; p < n; p++)
+            out[i * n + p] = outs[p][idx];
+        state = next[idx];
+    }
+    return out;
+}
+/**
+ * Soft-decision Viterbi. Input LLRs are positive when a 1 is more likely.
+ * Assumes the encoder starts and ends in state 0 (zero-terminated by tail bits).
+ */
+function viterbiDecode(llr, rate = 2) {
+    const { n, next, outs } = trellis(rate);
+    const steps = Math.floor(llr.length / n);
+    if (steps === 0)
+        return new Uint8Array(0);
+    const NEG = -1e9;
+    let metric = new Float64Array(STATES).fill(NEG);
+    let nextMetric = new Float64Array(STATES);
+    metric[0] = 0;
+    // The oldest register bit is lost in the successor state, so store predecessors explicitly.
+    const prevState = new Uint8Array(steps * STATES);
+    const prevBit = new Uint8Array(steps * STATES);
+    for (let t = 0; t < steps; t++) {
+        nextMetric.fill(NEG);
+        const base = t * n;
+        for (let state = 0; state < STATES; state++) {
+            const m = metric[state];
+            if (m === NEG)
+                continue;
+            for (let bit = 0; bit < 2; bit++) {
+                const idx = state * 2 + bit;
+                let branch = 0;
+                for (let p = 0; p < n; p++) {
+                    const l = llr[base + p];
+                    branch += outs[p][idx] ? l : -l;
+                }
+                const cand = m + branch;
+                const ns = next[idx];
+                if (cand > nextMetric[ns]) {
+                    nextMetric[ns] = cand;
+                    prevState[t * STATES + ns] = state;
+                    prevBit[t * STATES + ns] = bit;
+                }
+            }
+        }
+        const swap = metric;
+        metric = nextMetric;
+        nextMetric = swap;
+    }
+    // Tail bits force the encoder back to state 0, so traceback starts there.
+    let state = 0;
+    const bits = new Uint8Array(steps);
+    for (let t = steps - 1; t >= 0; t--) {
+        const slot = t * STATES + state;
+        bits[t] = prevBit[slot];
+        state = prevState[slot];
+    }
+    return bits;
+}
+
+});
+__def("crc", function (exports, require, module) {
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.crc16 = crc16;
+/** CRC-16/CCITT-FALSE: poly 0x1021, init 0xFFFF, no reflection, no final xor. */
+function crc16(data) {
+    let crc = 0xffff;
+    for (const byte of data) {
+        crc ^= byte << 8;
+        for (let i = 0; i < 8; i++) {
+            crc = crc & 0x8000 ? ((crc << 1) ^ 0x1021) & 0xffff : (crc << 1) & 0xffff;
+        }
+    }
+    return crc & 0xffff;
+}
+
+});
+__def("detector", function (exports, require, module) {
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.ToneDetector = void 0;
+exports.goertzelPower = goertzelPower;
+const config_js_1 = require("./config.js");
+/** Rectangular window on purpose: a Hann window's main lobe is wider than the 17.6 Hz tone spacing. */
+function goertzelPower(samples, offset, length, freq, sampleRate) {
+    const coeff = 2 * Math.cos((2 * Math.PI * freq) / sampleRate);
+    let s1 = 0;
+    let s2 = 0;
+    for (let i = 0; i < length; i++) {
+        const s0 = samples[offset + i] + coeff * s1 - s2;
+        s2 = s1;
+        s1 = s0;
+    }
+    return s1 * s1 + s2 * s2 - coeff * s1 * s2;
+}
+class ToneDetector {
+    sampleRate;
+    freqs;
+    amplitudes;
+    constructor(sampleRate = config_js_1.SAMPLE_RATE, offsetHz = 0) {
+        this.sampleRate = sampleRate;
+        this.freqs = new Float64Array(config_js_1.NUM_TONES);
+        this.amplitudes = new Float64Array(config_js_1.NUM_TONES);
+        for (let s = 0; s < config_js_1.NUM_TONES; s++)
+            this.freqs[s] = (0, config_js_1.toneFreq)(s, offsetHz);
+    }
+    detect(samples, offset, length) {
+        let best = -1;
+        let bestAmp = 0;
+        for (let s = 0; s < config_js_1.NUM_TONES; s++) {
+            const power = goertzelPower(samples, offset, length, this.freqs[s], this.sampleRate);
+            const amp = (2 * Math.sqrt(Math.max(power, 0))) / length;
+            this.amplitudes[s] = amp;
+            if (amp > bestAmp) {
+                bestAmp = amp;
+                best = s;
+            }
+        }
+        return {
+            symbol: best,
+            db: 20 * Math.log10(Math.max(bestAmp, 1e-10)),
+            amplitudes: this.amplitudes,
+        };
+    }
+}
+exports.ToneDetector = ToneDetector;
+
+});
+__def("fft", function (exports, require, module) {
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.fft = fft;
+exports.nextPowerOfTwo = nextPowerOfTwo;
+/** In-place iterative radix-2 FFT. Lengths must be powers of two. */
+function fft(re, im, inverse = false) {
+    const n = re.length;
+    if (n <= 1)
+        return;
+    for (let i = 1, j = 0; i < n; i++) {
+        let bit = n >> 1;
+        for (; j & bit; bit >>= 1)
+            j ^= bit;
+        j ^= bit;
+        if (i < j) {
+            [re[i], re[j]] = [re[j], re[i]];
+            [im[i], im[j]] = [im[j], im[i]];
+        }
+    }
+    for (let len = 2; len <= n; len <<= 1) {
+        const ang = ((inverse ? 2 : -2) * Math.PI) / len;
+        const wRe = Math.cos(ang);
+        const wIm = Math.sin(ang);
+        for (let i = 0; i < n; i += len) {
+            let curRe = 1;
+            let curIm = 0;
+            for (let k = 0; k < len / 2; k++) {
+                const aRe = re[i + k];
+                const aIm = im[i + k];
+                const bRe = re[i + k + len / 2] * curRe - im[i + k + len / 2] * curIm;
+                const bIm = re[i + k + len / 2] * curIm + im[i + k + len / 2] * curRe;
+                re[i + k] = aRe + bRe;
+                im[i + k] = aIm + bIm;
+                re[i + k + len / 2] = aRe - bRe;
+                im[i + k + len / 2] = aIm - bIm;
+                const nextRe = curRe * wRe - curIm * wIm;
+                curIm = curRe * wIm + curIm * wRe;
+                curRe = nextRe;
+            }
+        }
+    }
+    if (inverse) {
+        for (let i = 0; i < n; i++) {
+            re[i] /= n;
+            im[i] /= n;
+        }
+    }
+}
+function nextPowerOfTwo(n) {
+    let p = 1;
+    while (p < n)
+        p <<= 1;
+    return p;
+}
+
+});
+__def("fold", function (exports, require, module) {
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.dataSymbolCount = dataSymbolCount;
+exports.noiseFloors = noiseFloors;
+exports.decodeSpectrogram = decodeSpectrogram;
+exports.decodeSpectrogramAll = decodeSpectrogramAll;
+exports.foldDecode = foldDecode;
+exports.foldDecodeAll = foldDecodeAll;
+const config_js_1 = require("./config.js");
+const conv_js_1 = require("./conv.js");
+const framing_js_1 = require("./framing.js");
+const interleave_js_1 = require("./interleave.js");
+const spectro_js_1 = require("./spectro.js");
+const synclayout_js_1 = require("./synclayout.js");
+/** Symbols a frame occupies, derived from the protocol rather than detected. */
+function dataSymbolCount(messageBytes, rate) {
+    const infoBits = framing_js_1.LENGTH_BITS + messageBytes * 8 + 16 + conv_js_1.TAIL_BITS;
+    return Math.ceil((infoBits * rate) / config_js_1.BITS_PER_SYMBOL);
+}
+const NOTHING = (opts, score = 0) => ({
+    text: '',
+    score,
+    offsetHz: opts.offsetHz ?? 0,
+    driftPpm: opts.driftPpm ?? 0,
+});
+/** Median tone power approximates the noise floor without being dragged up by the signal tone. */
+function medianFloor(buf, base, scratch) {
+    for (let s = 0; s < config_js_1.NUM_TONES; s++)
+        scratch[s] = buf[base + s];
+    scratch.sort();
+    return Math.max(scratch[config_js_1.NUM_TONES >> 1], 1e-20);
+}
+/** Per-window noise floors. Hoisted out of the candidate loop so a drift sweep stays cheap. */
+function noiseFloors(spec) {
+    const out = new Float64Array(spec.windows);
+    const scratch = new Float64Array(config_js_1.NUM_TONES);
+    for (let w = 0; w < spec.windows; w++)
+        out[w] = medianFloor(spec.power, w * config_js_1.NUM_TONES, scratch);
+    return out;
+}
+/**
+ * Exact repeat correlation. Bursts recur at a known period, so tone powers are folded
+ * modulo that period, the preamble is found by matched filtering that folded view, and
+ * the per-burst soft metrics are then summed. Folding carries acquisition; summing LLRs
+ * across independent fades is what buys the diversity gain.
+ *
+ * Windows are mapped by absolute sample position, so a fractional period never accumulates
+ * rounding error across the schedule and clock drift can be searched as a plain parameter.
+ */
+function decodeSpectrogram(spec, opts, floors = noiseFloors(spec)) {
+    return decodeSpectrogramAll(spec, opts, floors)[0] ?? NOTHING(opts);
+}
+/**
+ * Decodes every distinct CRC-valid frame in a folded recording. Each preamble phase owns its
+ * own LLR vector, so interleaved stations remain separate while every repeat of that station
+ * contributes its likelihoods before the FEC decoder is called.
+ */
+function decodeSpectrogramAll(spec, opts, floors = noiseFloors(spec)) {
+    const { power, windows, hop } = spec;
+    if (windows <= 0)
+        return [];
+    const sampleRate = opts.sampleRate ?? config_js_1.SAMPLE_RATE;
+    const sampleOffset = opts.sampleOffset ?? 0;
+    const stretch = 1 + (opts.driftPpm ?? 0) / 1e6;
+    const period = opts.periodSamples * stretch;
+    const spb = (0, config_js_1.symbolSamples)(opts.baud, sampleRate) * stretch;
+    const markerPositions = (0, synclayout_js_1.syncMarkerPositions)(opts.dataSymbols, opts.preamblePairs);
+    const dataOffsets = (0, synclayout_js_1.dataSymbolOffsets)(opts.dataSymbols, opts.preamblePairs);
+    const periodWindows = Math.max(1, Math.round(period / hop));
+    const modulo = (value, divisor) => ((value % divisor) + divisor) % divisor;
+    const slotAt = (pos) => Math.round(modulo(pos, period) / hop) % periodWindows;
+    const folded = new Float64Array(periodWindows * config_js_1.NUM_TONES);
+    const hits = new Int32Array(periodWindows);
+    for (let w = 0; w < windows; w++) {
+        const src = w * config_js_1.NUM_TONES;
+        const slot = slotAt(sampleOffset + w * hop);
+        const dst = slot * config_js_1.NUM_TONES;
+        for (let s = 0; s < config_js_1.NUM_TONES; s++)
+            folded[dst + s] += power[src + s];
+        hits[slot]++;
+    }
+    const scratch = new Float64Array(config_js_1.NUM_TONES);
+    const foldFloor = new Float64Array(periodWindows);
+    for (let slot = 0; slot < periodWindows; slot++) {
+        const n = Math.max(1, hits[slot]);
+        const dst = slot * config_js_1.NUM_TONES;
+        for (let s = 0; s < config_js_1.NUM_TONES; s++)
+            folded[dst + s] /= n;
+        foldFloor[slot] = medianFloor(folded, dst, scratch);
+    }
+    // Matched filter on the known alternating sync markers, scattered across the folded period
+    // instead of clustered at its start (see synclayout.ts); the leading marker still anchors slot 0.
+    const scores = [];
+    for (let slot = 0; slot < periodWindows; slot++) {
+        let score = 0;
+        for (let j = 0; j < markerPositions.length; j++) {
+            const at = slotAt(slot * hop + markerPositions[j] * spb);
+            const tone = j % 2 === 0 ? config_js_1.SYM_SYNC_1 : config_js_1.SYM_SYNC_2;
+            score += folded[at * config_js_1.NUM_TONES + tone] / foldFloor[at];
+        }
+        scores.push({ slot, score });
+    }
+    scores.sort((a, b) => b.score - a.score);
+    const softInto = (w, out, offset) => {
+        const base = w * config_js_1.NUM_TONES;
+        const n = floors[w];
+        for (let b = 0; b < config_js_1.BITS_PER_SYMBOL; b++) {
+            let one = 0;
+            let zero = 0;
+            for (let s = 0; s < config_js_1.DATA_TONES; s++) {
+                const m = power[base + s] / n;
+                if ((s >> (config_js_1.BITS_PER_SYMBOL - 1 - b)) & 1) {
+                    if (m > one)
+                        one = m;
+                }
+                else if (m > zero)
+                    zero = m;
+            }
+            out[offset + b] += one - zero;
+        }
+    };
+    const bits = opts.dataSymbols * config_js_1.BITS_PER_SYMBOL;
+    const top = Math.min(opts.candidates ?? 24, scores.length);
+    const results = [];
+    const sampleEnd = sampleOffset + windows * hop;
+    const lastOffset = dataOffsets[dataOffsets.length - 1] ?? 0;
+    for (let c = 0; c < top; c++) {
+        const phaseSamples = modulo(scores[c].slot * hop, period);
+        // The leading marker sits at burst position 0, so the matched-filter phase IS the burst start.
+        const dataPhase = phaseSamples;
+        const soft = new Float64Array(bits);
+        let bursts = 0;
+        const firstBurst = dataPhase + Math.ceil((sampleOffset - dataPhase) / period) * period;
+        // Each whole burst is a distinct observation of this phase's coded bits. Do not accept a
+        // partial burst at either edge: it would leak an unrelated time slot into the LLR sum.
+        for (let burstStart = firstBurst; burstStart + lastOffset * spb <= sampleEnd; burstStart += period) {
+            const burstSoft = new Float64Array(bits);
+            let complete = true;
+            for (let symbolIndex = 0; symbolIndex < opts.dataSymbols; symbolIndex++) {
+                const windowIndex = Math.round((burstStart + dataOffsets[symbolIndex] * spb - sampleOffset) / hop);
+                if (windowIndex < 0 || windowIndex >= windows) {
+                    complete = false;
+                    break;
+                }
+                softInto(windowIndex, burstSoft, symbolIndex * config_js_1.BITS_PER_SYMBOL);
+            }
+            if (!complete)
+                continue;
+            for (let bitIndex = 0; bitIndex < bits; bitIndex++)
+                soft[bitIndex] += burstSoft[bitIndex];
+            bursts++;
+        }
+        if (bursts === 0)
+            continue;
+        const frame = opts.payloadBytes !== undefined
+            ? (0, framing_js_1.decodeTieredFrame)(soft, { interleaverWidth: opts.interleaverWidth, rate: opts.rate, maxPayloadBytes: opts.payloadBytes })
+            : (() => {
+                const single = (0, framing_js_1.parseInfoBits)((0, conv_js_1.viterbiDecode)((0, interleave_js_1.deinterleave)(soft, opts.interleaverWidth), opts.rate));
+                return single.ok ? single : undefined;
+            })();
+        if (!frame || !frame.data)
+            continue;
+        const result = {
+            text: String.fromCharCode(...frame.data),
+            score: scores[c].score,
+            offsetHz: opts.offsetHz ?? 0,
+            driftPpm: opts.driftPpm ?? 0,
+            phaseSamples,
+            bursts,
+        };
+        const duplicate = results.some((prior) => {
+            if (prior.text !== result.text || prior.phaseSamples === undefined)
+                return false;
+            const distance = Math.abs(prior.phaseSamples - phaseSamples);
+            return Math.min(distance, period - distance) < spb / 2;
+        });
+        if (!duplicate)
+            results.push(result);
+    }
+    return results;
+}
+/** Single-core convenience path: build the whole tone bank here, then decode it. */
+function foldDecode(samples, opts) {
+    return foldDecodeAll(samples, opts)[0] ?? NOTHING(opts);
+}
+/** Single-core convenience path that retains every decodable station in the recording. */
+function foldDecodeAll(samples, opts) {
+    const sampleRate = opts.sampleRate ?? config_js_1.SAMPLE_RATE;
+    const geom = (0, spectro_js_1.spectroGeometry)(samples.length, opts.baud, sampleRate);
+    if (geom.windows <= 0)
+        return [];
+    return decodeSpectrogramAll((0, spectro_js_1.fullSpectrogram)(samples, geom, sampleRate, opts.offsetHz ?? 0), opts);
+}
+
+});
+__def("framing", function (exports, require, module) {
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.MAX_PAYLOAD_BYTES = exports.LENGTH_BITS = void 0;
+exports.buildInfoBits = buildInfoBits;
+exports.parseInfoBits = parseInfoBits;
+exports.decodeTieredFrame = decodeTieredFrame;
+const config_js_1 = require("./config.js");
+const conv_js_1 = require("./conv.js");
+const crc_js_1 = require("./crc.js");
+const interleave_js_1 = require("./interleave.js");
+exports.LENGTH_BITS = 16;
+exports.MAX_PAYLOAD_BYTES = 512;
+function pushByte(bits, value, width) {
+    for (let i = width - 1; i >= 0; i--)
+        bits.push((value >> i) & 1);
+}
+function readNumber(bits, offset, width) {
+    let value = 0;
+    for (let i = 0; i < width; i++)
+        value = (value << 1) | (bits[offset + i] & 1);
+    return value;
+}
+/** Frame layout: length:16 | payload | crc16(payload) | zero tail. */
+function buildInfoBits(data) {
+    const bits = [];
+    pushByte(bits, data.length, exports.LENGTH_BITS);
+    for (const byte of data)
+        pushByte(bits, byte, 8);
+    pushByte(bits, (0, crc_js_1.crc16)(data), 16);
+    for (let i = 0; i < conv_js_1.TAIL_BITS; i++)
+        bits.push(0);
+    return Uint8Array.from(bits);
+}
+function parseInfoBits(bits) {
+    if (bits.length < exports.LENGTH_BITS + 16)
+        return { ok: false, reason: 'frame too short' };
+    const length = readNumber(bits, 0, exports.LENGTH_BITS);
+    if (length === 0 || length > exports.MAX_PAYLOAD_BYTES)
+        return { ok: false, reason: `bad length ${length}` };
+    const needed = exports.LENGTH_BITS + length * 8 + 16;
+    if (bits.length < needed)
+        return { ok: false, reason: 'truncated frame' };
+    const data = new Uint8Array(length);
+    for (let i = 0; i < length; i++)
+        data[i] = readNumber(bits, exports.LENGTH_BITS + i * 8, 8);
+    const received = readNumber(bits, exports.LENGTH_BITS + length * 8, 16);
+    if (received !== (0, crc_js_1.crc16)(data))
+        return { ok: false, reason: 'CRC mismatch' };
+    return { ok: true, data };
+}
+/** Coded+padded bit count for one payload length; must track tx.ts's own per-unit padding. */
+function unitCodedBits(payloadBytes, rate) {
+    const infoBits = exports.LENGTH_BITS + payloadBytes * 8 + 16 + conv_js_1.TAIL_BITS;
+    return Math.ceil((infoBits * rate) / config_js_1.BITS_PER_SYMBOL) * config_js_1.BITS_PER_SYMBOL;
+}
+/**
+ * A short chat message tiles its own coded unit to fill the fixed symbol budget instead of
+ * sending padding, so this recombines however many whole copies fit (same LLR-summing trick
+ * already used to combine repeated bursts, just inside a single one) before a single Viterbi
+ * decode. Tries every payload length down from the ceiling; CRC-16 alone decides which length,
+ * if any, is the true one -- a wrong hypothesis passing by chance is astronomically unlikely.
+ */
+function decodeTieredFrame(soft, opts) {
+    for (let length = opts.maxPayloadBytes; length >= 1; length--) {
+        const unitBits = unitCodedBits(length, opts.rate);
+        const repeats = Math.floor(soft.length / unitBits);
+        if (repeats < 1)
+            continue;
+        const unitSoft = new Float64Array(unitBits);
+        for (let r = 0; r < repeats; r++) {
+            const base = r * unitBits;
+            for (let i = 0; i < unitBits; i++)
+                unitSoft[i] += soft[base + i];
+        }
+        const frame = parseInfoBits((0, conv_js_1.viterbiDecode)((0, interleave_js_1.deinterleave)(unitSoft, opts.interleaverWidth), opts.rate));
+        if (frame.ok && frame.data && frame.data.length === length)
+            return frame;
+    }
+    return undefined;
+}
+
+});
+__def("hamming", function (exports, require, module) {
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.hammingEncode = hammingEncode;
+exports.hammingDecode = hammingDecode;
+function hammingEncode(nibble) {
+    const d1 = (nibble >> 3) & 1;
+    const d2 = (nibble >> 2) & 1;
+    const d3 = (nibble >> 1) & 1;
+    const d4 = nibble & 1;
+    const p1 = d1 ^ d2 ^ d4;
+    const p2 = d1 ^ d3 ^ d4;
+    const p3 = d2 ^ d3 ^ d4;
+    return (p1 << 6) | (p2 << 5) | (d1 << 4) | (p3 << 3) | (d2 << 2) | (d3 << 1) | d4;
+}
+function hammingDecode(block) {
+    const p1 = (block >> 6) & 1;
+    const p2 = (block >> 5) & 1;
+    const d1 = (block >> 4) & 1;
+    const p3 = (block >> 3) & 1;
+    const d2 = (block >> 2) & 1;
+    const d3 = (block >> 1) & 1;
+    const d4 = block & 1;
+    const z1 = p1 ^ d1 ^ d2 ^ d4;
+    const z2 = p2 ^ d1 ^ d3 ^ d4;
+    const z3 = p3 ^ d2 ^ d3 ^ d4;
+    const syndrome = (z3 << 2) | (z2 << 1) | z1;
+    let corrected = block;
+    let wasCorrected = false;
+    if (syndrome !== 0) {
+        corrected ^= 1 << (7 - syndrome);
+        wasCorrected = true;
+    }
+    const cd1 = (corrected >> 4) & 1;
+    const cd2 = (corrected >> 2) & 1;
+    const cd3 = (corrected >> 1) & 1;
+    const cd4 = corrected & 1;
+    return { nibble: (cd1 << 3) | (cd2 << 2) | (cd3 << 1) | cd4, corrected: wasCorrected };
+}
+
+});
+__def("interleave", function (exports, require, module) {
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.INTERLEAVER_WIDTH = void 0;
+exports.interleave = interleave;
+exports.deinterleave = deinterleave;
+/** Block interleaver: written row-wise, read column-wise, so adjacent coded bits end up rows apart. */
+exports.INTERLEAVER_WIDTH = 8;
+function permutation(length, width) {
+    const rows = Math.ceil(length / width);
+    const perm = new Uint32Array(length);
+    let k = 0;
+    for (let c = 0; c < width; c++) {
+        for (let r = 0; r < rows; r++) {
+            const idx = r * width + c;
+            if (idx < length)
+                perm[k++] = idx;
+        }
+    }
+    return perm;
+}
+function interleave(bits, width = exports.INTERLEAVER_WIDTH) {
+    const perm = permutation(bits.length, width);
+    const out = new Uint8Array(bits.length);
+    for (let k = 0; k < perm.length; k++)
+        out[k] = bits[perm[k]];
+    return out;
+}
+function deinterleave(values, width = exports.INTERLEAVER_WIDTH) {
+    const perm = permutation(values.length, width);
+    const out = new Float64Array(values.length);
+    for (let k = 0; k < perm.length; k++)
+        out[perm[k]] = values[k];
+    return out;
+}
+
+});
+__def("packet", function (exports, require, module) {
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.CHAT_PAYLOAD_BYTES = void 0;
+exports.isPrintableAscii = isPrintableAscii;
+exports.encodeChatMessage = encodeChatMessage;
+exports.decodeChatMessage = decodeChatMessage;
+/** Chat payload ceiling; short messages are left-packed, long ones truncated, nothing padded. */
+exports.CHAT_PAYLOAD_BYTES = 16;
+function isPrintableAscii(value) {
+    return value >= 0x20 && value <= 0x7e;
+}
+/** Keeps only printable ASCII and truncates to CHAT_PAYLOAD_BYTES characters; not padded, so a
+ * short message's frame leaves spare capacity for the transmitter to spend on redundancy instead. */
+function encodeChatMessage(text) {
+    const bytes = [];
+    for (const character of text) {
+        if (bytes.length >= exports.CHAT_PAYLOAD_BYTES)
+            break;
+        const code = character.charCodeAt(0) & 0xff;
+        if (!isPrintableAscii(code))
+            continue;
+        bytes.push(code);
+    }
+    return Uint8Array.from(bytes);
+}
+/** Turns a decoded chat payload back into text; undefined if it isn't valid printable ASCII. */
+function decodeChatMessage(data) {
+    const bytes = typeof data === 'string' ? Uint8Array.from(data, (character) => character.charCodeAt(0) & 0xff) : data;
+    if (bytes.length < 1 || bytes.length > exports.CHAT_PAYLOAD_BYTES)
+        return undefined;
+    let text = '';
+    for (const byte of bytes) {
+        if (!isPrintableAscii(byte))
+            return undefined;
+        text += String.fromCharCode(byte);
+    }
+    return text;
+}
+
+});
+__def("protocol", function (exports, require, module) {
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.summary = exports.CHUNK_SLOT_SAMPLES = exports.CHUNK_BURST_SAMPLES = exports.CHUNK_BURST_SYMBOLS = exports.CHUNK_GUARD_SAMPLES = exports.CHUNK_GUARD_SECONDS = exports.CHUNK_DATA_SYMBOLS = exports.CHUNKS = exports.CHUNK_TOTAL_BITS = exports.CHUNK_INFO_BITS = exports.DECODE_OPTIONS = exports.LIVE_DECODE_SAMPLES = exports.LIVE_RING_SAMPLES = exports.LIVE_FOLD_REPEATS = exports.SCHEDULE_SAMPLES = exports.GAP_SECONDS = exports.GAP_SAMPLES = exports.PERIOD_SAMPLES = exports.BASIC_FRAMES_PER_REPEAT = exports.SLOT_SAMPLES = exports.GUARD_SAMPLES = exports.BURST_SAMPLES = exports.DATA_SYMBOLS = exports.FRAME_OPTIONS = exports.LEAD_SECONDS = exports.AMPLITUDE = exports.PAYLOAD_BYTES = exports.GUARD_SECONDS = exports.REPEATS = exports.PREAMBLE_PAIRS = exports.INTERLEAVER_WIDTH = exports.RATE = exports.BAUD = void 0;
+exports.padMessage = padMessage;
+const config_js_1 = require("./config.js");
+const conv_js_1 = require("./conv.js");
+const fold_js_1 = require("./fold.js");
+const framing_js_1 = require("./framing.js");
+const packet_js_1 = require("./packet.js");
+const tx_js_1 = require("./tx.js");
+/**
+ * Frozen protocol. Every value here won its parameter sweep; nothing is user tunable,
+ * so any two builds of this program can always talk to each other.
+ */
+exports.BAUD = 8;
+exports.RATE = 3;
+exports.INTERLEAVER_WIDTH = 64;
+/** Shortened sync: enough alternating tones to acquire, without the old drawn-out preamble. */
+exports.PREAMBLE_PAIRS = 2;
+/** Ceiling on back-to-back repeats a station may choose as its FEC strength for one message.
+ * Raised well past a quick-chat count so the same protocol can also reach for WSPR-grade
+ * weak-signal margin by just repeating longer; the receiver already blindly folds however many
+ * of them it actually hears, so this is a practical/memory bound, not a protocol requirement. */
+exports.REPEATS = 60;
+/** Dead air at both ends of a burst's slot: PTT, path delay, and the other station's decode. */
+exports.GUARD_SECONDS = 2;
+/** Chat payload ceiling: fixes the burst's duration. A shorter message doesn't shrink the
+ * burst -- it tiles its own coded unit to fill the same fixed budget instead of padding, which
+ * is what buys it extra weak-signal margin (see tx.ts `chatBytesToSymbols` / framing.ts
+ * `decodeTieredFrame`). */
+exports.PAYLOAD_BYTES = packet_js_1.CHAT_PAYLOAD_BYTES;
+exports.AMPLITUDE = 0.5;
+exports.LEAD_SECONDS = 1;
+exports.FRAME_OPTIONS = {
+    interleaverWidth: exports.INTERLEAVER_WIDTH,
+    preamblePairs: exports.PREAMBLE_PAIRS,
+    rate: exports.RATE,
+};
+/** Pads/truncates a chat message to the fixed payload size before it is framed and coded. */
+function padMessage(message) {
+    return message.slice(0, exports.PAYLOAD_BYTES).padEnd(exports.PAYLOAD_BYTES, ' ');
+}
+exports.DATA_SYMBOLS = (0, fold_js_1.dataSymbolCount)(exports.PAYLOAD_BYTES, exports.RATE);
+exports.BURST_SAMPLES = (0, tx_js_1.textToSymbols)(padMessage(''), 'conv', exports.FRAME_OPTIONS).length * (0, config_js_1.symbolSamples)(exports.BAUD);
+exports.GUARD_SAMPLES = exports.GUARD_SECONDS * config_js_1.SAMPLE_RATE;
+/**
+ * One repeat is two basic frames: a transmit frame and a listening frame -- always tx, rx, tx,
+ * rx... no separate second listening/reply slot (the chat protocol dropped ACK/reply handling
+ * already; a second frame just sitting idle bought nothing). A message is sent once, or as
+ * several of these back-to-back repeats chosen as its FEC strength -- the receiver folds
+ * however many of them it actually hears, without needing to know the count.
+ *
+ *   |<----- TX ----->|<------- RX ------->|
+ *   | g |  BURST  |g|                     |
+ *   |<--------- repeat period ----------->|
+ */
+exports.SLOT_SAMPLES = exports.BURST_SAMPLES + 2 * exports.GUARD_SAMPLES;
+exports.BASIC_FRAMES_PER_REPEAT = 2;
+exports.PERIOD_SAMPLES = exports.BASIC_FRAMES_PER_REPEAT * exports.SLOT_SAMPLES;
+exports.GAP_SAMPLES = exports.PERIOD_SAMPLES - exports.BURST_SAMPLES;
+exports.GAP_SECONDS = exports.GAP_SAMPLES / config_js_1.SAMPLE_RATE;
+exports.SCHEDULE_SAMPLES = exports.REPEATS * exports.PERIOD_SAMPLES;
+/**
+ * How deep a *live* station folds. The transmit ceiling (`REPEATS`) may be far larger, but a
+ * live receiver has to finish one fold inside a single decode cycle: the search saturates the
+ * whole worker pool, and if it overruns, the main thread stops feeding PipeWire and the
+ * outgoing audio breaks up. Folding ~28 minutes of ring every 14 s did exactly that. Deep,
+ * WSPR-style accumulation belongs in the offline `qnr rx -i file.wav` path, which may take as
+ * long as it likes because nothing is being transmitted while it runs.
+ *
+ * Measured on 12 cores / 9 live worker threads, worst case (idle noise, so no early exit):
+ * depth 1 -> 11.6 s, depth 2 -> 14.5 s, depth 4 -> 20.4 s. One decode per period gives a
+ * 27.8 s budget, so depth 4 fits with headroom while still buying real repeat gain.
+ */
+exports.LIVE_FOLD_REPEATS = 4;
+exports.LIVE_RING_SAMPLES = (exports.LIVE_FOLD_REPEATS + 1) * exports.PERIOD_SAMPLES;
+/** Live redecode cadence: one attempt per period, which is one attempt per transmitted burst. */
+exports.LIVE_DECODE_SAMPLES = exports.PERIOD_SAMPLES;
+exports.DECODE_OPTIONS = {
+    baud: exports.BAUD,
+    periodSamples: exports.PERIOD_SAMPLES,
+    preamblePairs: exports.PREAMBLE_PAIRS,
+    dataSymbols: exports.DATA_SYMBOLS,
+    interleaverWidth: exports.INTERLEAVER_WIDTH,
+    rate: exports.RATE,
+    payloadBytes: exports.PAYLOAD_BYTES,
+    burstSamples: exports.BURST_SAMPLES,
+};
+/**
+ * Fast/chunked grid ("3-second grid"): the same conv+Viterbi+CRC-16 pipeline as the plain chat
+ * burst above, but one fixed-size codeword is spread across `CHUNKS` short incremental-redundancy
+ * bursts (a striped subset of the interleaved coded bits per burst) instead of sent whole in one
+ * long burst. A nearby station can decode once it has folded enough chunk bursts to cover the
+ * code; a late-joining or weak station keeps accumulating LLR from whatever subset of bursts it
+ * actually hears -- which chunk a given burst carries is derived purely from its position on the
+ * shared time grid, so no station needs to know what anyone else already sent (see chunked.ts).
+ */
+exports.CHUNK_INFO_BITS = framing_js_1.LENGTH_BITS + exports.PAYLOAD_BYTES * 8 + 16 + conv_js_1.TAIL_BITS;
+exports.CHUNK_TOTAL_BITS = Math.ceil((exports.CHUNK_INFO_BITS * exports.RATE) / config_js_1.BITS_PER_SYMBOL) * config_js_1.BITS_PER_SYMBOL;
+/** Must divide CHUNK_TOTAL_BITS exactly so every chunk burst is the same fixed length. */
+exports.CHUNKS = 6;
+if (exports.CHUNK_TOTAL_BITS % exports.CHUNKS !== 0) {
+    throw new Error(`CHUNKS=${exports.CHUNKS} must divide CHUNK_TOTAL_BITS=${exports.CHUNK_TOTAL_BITS} evenly`);
+}
+exports.CHUNK_DATA_SYMBOLS = exports.CHUNK_TOTAL_BITS / exports.CHUNKS / config_js_1.BITS_PER_SYMBOL;
+exports.CHUNK_GUARD_SECONDS = 0.3;
+exports.CHUNK_GUARD_SAMPLES = Math.round(exports.CHUNK_GUARD_SECONDS * config_js_1.SAMPLE_RATE);
+exports.CHUNK_BURST_SYMBOLS = exports.PREAMBLE_PAIRS * 2 + exports.CHUNK_DATA_SYMBOLS + 3;
+exports.CHUNK_BURST_SAMPLES = exports.CHUNK_BURST_SYMBOLS * (0, config_js_1.symbolSamples)(exports.BAUD);
+/** One 3-second-ish basic frame: chunk burst plus its guards, back to back forever. */
+exports.CHUNK_SLOT_SAMPLES = exports.CHUNK_BURST_SAMPLES + 2 * exports.CHUNK_GUARD_SAMPLES;
+const summary = () => [
+    `${exports.BAUD} Bd - 144 tones - 498..3012 Hz (2.51 kHz)`,
+    `conv K=7 rate 1/${exports.RATE} + Viterbi, interleave ${exports.INTERLEAVER_WIDTH}, CRC-16`,
+    `up to ${exports.REPEATS} repeats of ${(exports.BURST_SAMPLES / config_js_1.SAMPLE_RATE).toFixed(1)}s, chosen as FEC strength, alternating ${(exports.SLOT_SAMPLES / config_js_1.SAMPLE_RATE).toFixed(1)}s tx/rx basic frames (${exports.GUARD_SECONDS}s guards)`,
+    `${exports.GAP_SECONDS.toFixed(1)}s listening gap between repeats, up to ${(exports.SCHEDULE_SAMPLES / config_js_1.SAMPLE_RATE / 60).toFixed(0)} min schedule for WSPR-grade weak-signal accumulation`,
+    `fast grid: ${(exports.CHUNK_SLOT_SAMPLES / config_js_1.SAMPLE_RATE).toFixed(2)}s chunk bursts, ${exports.CHUNKS}-way incremental redundancy, late-join capable`,
+    `schedule ${(exports.SCHEDULE_SAMPLES / config_js_1.SAMPLE_RATE).toFixed(0)}s, chat payload up to ${exports.PAYLOAD_BYTES} bytes (shorter messages tile for extra FEC margin)`,
+].join('\n');
+exports.summary = summary;
+
+});
+__def("rng", function (exports, require, module) {
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.mulberry32 = mulberry32;
+exports.gaussian = gaussian;
+/** Deterministic PRNG so channel simulations are reproducible. */
+function mulberry32(seed) {
+    let a = seed >>> 0;
+    return () => {
+        a = (a + 0x6d2b79f5) >>> 0;
+        let t = a;
+        t = Math.imul(t ^ (t >>> 15), t | 1);
+        t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+}
+function gaussian(rand) {
+    const u = Math.max(rand(), 1e-12);
+    return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * rand());
+}
+
+});
+__def("rx", function (exports, require, module) {
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.Receiver = void 0;
+const config_js_1 = require("./config.js");
+const conv_js_1 = require("./conv.js");
+const detector_js_1 = require("./detector.js");
+const framing_js_1 = require("./framing.js");
+const hamming_js_1 = require("./hamming.js");
+const interleave_js_1 = require("./interleave.js");
+const synclayout_js_1 = require("./synclayout.js");
+class Receiver {
+    cb;
+    sampleRate;
+    mode;
+    squelchDb = config_js_1.DEFAULT_SQUELCH_DB;
+    detector;
+    buf = new Float32Array(1 << 16);
+    bufLen = 0;
+    bufStart = 0;
+    spb = 0;
+    windowLen = 0;
+    hop = 0;
+    state = 'SEARCH';
+    nextWindow = 0;
+    nextCenter = 0;
+    prevSymbol = -1;
+    syncCount = 0;
+    pendingNibble = null;
+    dropouts = 0;
+    softBits = [];
+    trailingErasures = 0;
+    accumulated = null;
+    burstCount = 0;
+    interleaverWidth;
+    rate;
+    combineRepeats;
+    maxPayloadBytes;
+    /** Physical positions (0-based, from the burst's leading marker pair) holding a mid-burst
+     * sync marker; undefined when the burst's data-symbol count isn't known in advance. */
+    markerPositions;
+    /** Physical symbol position within the current burst, counted from the leading marker pair. */
+    framePos = 0;
+    constructor(baud, cb = {}, sampleRate = config_js_1.SAMPLE_RATE, mode = 'hamming', options = {}) {
+        this.cb = cb;
+        this.sampleRate = sampleRate;
+        this.mode = mode;
+        const opts = typeof options === 'number' ? { interleaverWidth: options } : options;
+        this.interleaverWidth = opts.interleaverWidth;
+        this.rate = opts.rate ?? 2;
+        this.combineRepeats = opts.combineRepeats ?? true;
+        this.maxPayloadBytes = opts.maxPayloadBytes;
+        if (opts.dataSymbols !== undefined) {
+            const preamblePairs = opts.preamblePairs ?? config_js_1.PREAMBLE_PAIRS;
+            this.markerPositions = new Set((0, synclayout_js_1.syncMarkerPositions)(opts.dataSymbols, preamblePairs).filter((p) => p >= 2));
+        }
+        this.detector = new detector_js_1.ToneDetector(sampleRate);
+        this.setBaud(baud);
+    }
+    /** Clears accumulated repeat energy; call between unrelated transmissions. */
+    resetCombining() {
+        this.accumulated = null;
+        this.burstCount = 0;
+    }
+    setFec(mode) {
+        this.mode = mode;
+        this.reset();
+    }
+    setBaud(baud) {
+        this.spb = (0, config_js_1.symbolSamples)(baud, this.sampleRate);
+        this.windowLen = Math.min(this.spb, 8192, Math.max(2048, Math.floor(this.spb * 0.75)));
+        this.hop = Math.max(1, Math.floor(this.spb / 8));
+        this.reset();
+    }
+    reset() {
+        this.bufLen = 0;
+        this.bufStart = 0;
+        this.nextWindow = 0;
+        this.toSearch();
+    }
+    getState() {
+        return this.state;
+    }
+    push(chunk) {
+        this.append(chunk);
+        const end = () => this.bufStart + this.bufLen;
+        for (;;) {
+            if (this.state === 'SEARCH') {
+                if (this.nextWindow < this.bufStart)
+                    this.nextWindow = this.bufStart;
+                if (this.nextWindow + this.windowLen > end())
+                    break;
+                const est = this.detector.detect(this.buf, this.nextWindow - this.bufStart, this.windowLen);
+                this.handleSearch(est.db, est.symbol, est.amplitudes, this.nextWindow);
+                if (this.state === 'SEARCH')
+                    this.nextWindow += this.hop;
+            }
+            else {
+                const start = this.nextCenter - Math.floor(this.windowLen / 2);
+                if (start + this.windowLen > end())
+                    break;
+                if (start < this.bufStart) {
+                    this.nextCenter += this.spb;
+                    continue;
+                }
+                const est = this.detector.detect(this.buf, start - this.bufStart, this.windowLen);
+                this.nextCenter += this.spb;
+                this.handleLocked(est.db, est.symbol, est.amplitudes);
+            }
+        }
+        const anchor = this.state === 'SEARCH' ? this.nextWindow : this.nextCenter - this.windowLen;
+        this.compact(anchor - this.windowLen);
+    }
+    handleSearch(db, symbol, amps, windowStart) {
+        const sym = db > this.squelchDb ? symbol : -1;
+        this.cb.onLevel?.(db, sym, amps);
+        const isSync = sym === config_js_1.SYM_SYNC_1 || sym === config_js_1.SYM_SYNC_2;
+        const transitioned = (this.prevSymbol === config_js_1.SYM_SYNC_1 && sym === config_js_1.SYM_SYNC_2) ||
+            (this.prevSymbol === config_js_1.SYM_SYNC_2 && sym === config_js_1.SYM_SYNC_1);
+        if (isSync && transitioned) {
+            // First window dominated by the new tone starts ~half a window before the true boundary.
+            const boundary = windowStart + Math.floor(this.windowLen / 2);
+            this.nextCenter = boundary + Math.floor(this.spb / 2);
+            this.syncCount = 1;
+            this.setState('SYNC');
+        }
+        this.prevSymbol = sym;
+    }
+    handleLocked(db, symbol, amps) {
+        const sym = db > this.squelchDb ? symbol : -1;
+        this.cb.onLevel?.(db, sym, amps);
+        if (this.state === 'SYNC') {
+            if (sym === config_js_1.SYM_SYNC_1 || sym === config_js_1.SYM_SYNC_2) {
+                this.syncCount++;
+                return;
+            }
+            if (sym >= 0 && sym <= 127 && this.syncCount >= 2) {
+                this.pendingNibble = null;
+                this.dropouts = 0;
+                this.softBits = [];
+                this.framePos = 2;
+                this.setState('DATA');
+                this.cb.onLog?.(`Clock locked after ${this.syncCount} sync symbols`, 'info');
+                this.handleData(sym, amps);
+                return;
+            }
+            if (sym < 0) {
+                this.dropouts++;
+                if (this.dropouts > 2)
+                    this.toSearch();
+                return;
+            }
+            this.toSearch();
+            return;
+        }
+        this.handleData(sym, amps);
+    }
+    /** Max-log soft metric per bit: strongest tone with the bit set versus strongest with it clear. */
+    pushSoftBits(amps) {
+        let peak = 0;
+        for (let s = 0; s < config_js_1.DATA_TONES; s++)
+            peak = Math.max(peak, amps[s]);
+        const scale = 1 / (peak + 1e-12);
+        for (let b = 0; b < config_js_1.BITS_PER_SYMBOL; b++) {
+            let one = 0;
+            let zero = 0;
+            for (let s = 0; s < config_js_1.DATA_TONES; s++) {
+                const a = amps[s];
+                if ((s >> (config_js_1.BITS_PER_SYMBOL - 1 - b)) & 1) {
+                    if (a > one)
+                        one = a;
+                }
+                else if (a > zero)
+                    zero = a;
+            }
+            this.softBits.push((one - zero) * scale);
+        }
+        this.trailingErasures = 0;
+    }
+    decodeSoft(soft) {
+        const frame = this.maxPayloadBytes !== undefined
+            ? (0, framing_js_1.decodeTieredFrame)(soft, {
+                interleaverWidth: this.interleaverWidth ?? interleave_js_1.INTERLEAVER_WIDTH,
+                rate: this.rate,
+                maxPayloadBytes: this.maxPayloadBytes,
+            })
+            : (() => {
+                const single = (0, framing_js_1.parseInfoBits)((0, conv_js_1.viterbiDecode)((0, interleave_js_1.deinterleave)(soft, this.interleaverWidth), this.rate));
+                return single.ok ? single : undefined;
+            })();
+        if (!frame || !frame.data)
+            return false;
+        for (const byte of frame.data)
+            this.cb.onChar?.(String.fromCharCode(byte));
+        return true;
+    }
+    finishFrame() {
+        // Erasures inserted during the closing IDLE symbols must not extend the interleaver block.
+        const drop = this.trailingErasures * config_js_1.BITS_PER_SYMBOL;
+        const collected = drop > 0 ? this.softBits.slice(0, this.softBits.length - drop) : this.softBits;
+        this.softBits = [];
+        this.trailingErasures = 0;
+        if (collected.length < config_js_1.BITS_PER_SYMBOL * 4)
+            return;
+        const soft = Float64Array.from(collected);
+        this.burstCount++;
+        if (this.decodeSoft(soft)) {
+            this.cb.onLog?.(`Frame OK on burst ${this.burstCount}`, 'info');
+            this.cb.onFrame?.({ ok: true, combined: false, bursts: this.burstCount });
+            this.resetCombining();
+            return;
+        }
+        if (!this.combineRepeats) {
+            this.cb.onLog?.('Frame rejected (CRC)', 'fail');
+            this.cb.onFrame?.({ ok: false, combined: false, bursts: this.burstCount });
+            return;
+        }
+        // Identical repeats carry identical coded bits, so summing LLRs buys diversity gain.
+        if (this.accumulated && this.accumulated.length === soft.length) {
+            for (let i = 0; i < soft.length; i++)
+                this.accumulated[i] += soft[i];
+        }
+        else {
+            this.accumulated = Float64Array.from(soft);
+        }
+        if (this.burstCount > 1 && this.decodeSoft(this.accumulated)) {
+            this.cb.onLog?.(`Frame OK after combining ${this.burstCount} bursts`, 'info');
+            this.cb.onFrame?.({ ok: true, combined: true, bursts: this.burstCount });
+            this.resetCombining();
+            return;
+        }
+        this.cb.onLog?.(`Burst ${this.burstCount} failed, accumulating`, 'fail');
+        this.cb.onFrame?.({ ok: false, combined: this.burstCount > 1, bursts: this.burstCount });
+    }
+    handleData(sym, amps) {
+        if (this.mode === 'conv') {
+            const pos = this.framePos++;
+            if (this.markerPositions?.has(pos)) {
+                // Expected mid-burst sync marker (see synclayout.ts): consumes a physical slot but
+                // carries no coded bits, so it must be skipped rather than pushed as an erasure.
+                this.dropouts = 0;
+                return;
+            }
+            const lost = sym < 0 || sym === config_js_1.SYM_IDLE || sym > 127;
+            if (lost) {
+                this.dropouts++;
+                if (this.dropouts > 2) {
+                    this.finishFrame();
+                    this.toSearch();
+                    return;
+                }
+                // Keep bit alignment by inserting erasures rather than dropping the slot.
+                for (let b = 0; b < config_js_1.BITS_PER_SYMBOL; b++)
+                    this.softBits.push(0);
+                this.trailingErasures++;
+                return;
+            }
+            this.dropouts = 0;
+            this.pushSoftBits(amps);
+            return;
+        }
+        if (sym < 0 || sym === config_js_1.SYM_IDLE || sym > 127) {
+            this.dropouts++;
+            if (this.dropouts > 2) {
+                this.cb.onLog?.('EOT - returning to search', 'fail');
+                this.toSearch();
+            }
+            return;
+        }
+        this.dropouts = 0;
+        const res = (0, hamming_js_1.hammingDecode)(sym);
+        if (res.corrected)
+            this.cb.onLog?.(`FEC corrected bit in symbol ${sym}`, 'corr');
+        if (this.pendingNibble === null) {
+            this.pendingNibble = res.nibble;
+        }
+        else {
+            const code = (this.pendingNibble << 4) | res.nibble;
+            this.pendingNibble = null;
+            this.cb.onChar?.(String.fromCharCode(code));
+        }
+    }
+    toSearch() {
+        this.nextWindow = Math.max(this.nextWindow, this.nextCenter);
+        this.prevSymbol = -1;
+        this.syncCount = 0;
+        this.pendingNibble = null;
+        this.dropouts = 0;
+        this.softBits = [];
+        this.trailingErasures = 0;
+        this.setState('SEARCH');
+    }
+    setState(state) {
+        if (this.state === state)
+            return;
+        this.state = state;
+        this.cb.onState?.(state);
+    }
+    append(chunk) {
+        const needed = this.bufLen + chunk.length;
+        if (needed > this.buf.length) {
+            const grown = new Float32Array(Math.max(needed, this.buf.length * 2));
+            grown.set(this.buf.subarray(0, this.bufLen));
+            this.buf = grown;
+        }
+        this.buf.set(chunk, this.bufLen);
+        this.bufLen += chunk.length;
+    }
+    compact(keepFromAbs) {
+        const drop = Math.max(0, Math.min(keepFromAbs - this.bufStart, this.bufLen));
+        if (drop <= 0)
+            return;
+        this.buf.copyWithin(0, drop, this.bufLen);
+        this.bufLen -= drop;
+        this.bufStart += drop;
+    }
+}
+exports.Receiver = Receiver;
+
+});
+__def("spectro", function (exports, require, module) {
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.spectroGeometry = spectroGeometry;
+exports.fillSpectrogram = fillSpectrogram;
+exports.fullSpectrogram = fullSpectrogram;
+exports.syncSpectrogram = syncSpectrogram;
+exports.sharedSamples = sharedSamples;
+exports.sharedPower = sharedPower;
+const config_js_1 = require("./config.js");
+const detector_js_1 = require("./detector.js");
+function spectroGeometry(sampleCount, baud, sampleRate = config_js_1.SAMPLE_RATE) {
+    const spb = (0, config_js_1.symbolSamples)(baud, sampleRate);
+    const windowLen = Math.min(spb, 8192, Math.max(2048, Math.floor(spb * 0.75)));
+    const hop = Math.max(1, Math.floor(spb / 8));
+    return { windowLen, hop, windows: Math.floor((sampleCount - windowLen) / hop) + 1 };
+}
+/** Same scaling the tone detector uses, so soft metrics are unchanged by where this runs. */
+function tonePower(samples, at, len, freq, sampleRate) {
+    const amp = (2 * Math.sqrt(Math.max((0, detector_js_1.goertzelPower)(samples, at, len, freq, sampleRate), 0))) / len;
+    return amp * amp;
+}
+/**
+ * Fills one slice of the tone comb. Slicing by tone is what makes the bank parallel:
+ * every worker walks the same samples and writes disjoint columns, so the result is
+ * bit-identical to computing the whole thing on one core.
+ */
+function fillSpectrogram(samples, geom, sampleRate, offsetHz, toneStart, toneEnd, out) {
+    const { windowLen, hop, windows } = geom;
+    for (let s = toneStart; s < toneEnd; s++) {
+        const freq = (0, config_js_1.toneFreq)(s, offsetHz);
+        for (let w = 0; w < windows; w++) {
+            out[w * config_js_1.NUM_TONES + s] = tonePower(samples, w * hop, windowLen, freq, sampleRate);
+        }
+    }
+}
+function fullSpectrogram(samples, geom, sampleRate, offsetHz = 0) {
+    const power = new Float64Array(geom.windows * config_js_1.NUM_TONES);
+    fillSpectrogram(samples, geom, sampleRate, offsetHz, 0, config_js_1.NUM_TONES, power);
+    return { ...geom, power };
+}
+/**
+ * Only the two preamble tones, laid out as sync[window * 2 + parity]. Acquisition needs
+ * nothing else, so scanning tuning offsets costs 2/144 of a full spectrogram per offset.
+ */
+function syncSpectrogram(samples, geom, sampleRate, offsetHz) {
+    const { windowLen, hop, windows } = geom;
+    const out = new Float64Array(windows * 2);
+    const freqs = [(0, config_js_1.toneFreq)(config_js_1.SYM_SYNC_1, offsetHz), (0, config_js_1.toneFreq)(config_js_1.SYM_SYNC_2, offsetHz)];
+    for (let t = 0; t < 2; t++) {
+        const freq = freqs[t];
+        for (let w = 0; w < windows; w++) {
+            out[w * 2 + t] = tonePower(samples, w * hop, windowLen, freq, sampleRate);
+        }
+    }
+    return out;
+}
+/** Workers read the audio in place; copying 27 MB per task would cost more than the DSP. */
+function sharedSamples(samples) {
+    const view = new Float32Array(new SharedArrayBuffer(samples.length * 4));
+    view.set(samples);
+    return view;
+}
+function sharedPower(geom) {
+    return new Float64Array(new SharedArrayBuffer(geom.windows * config_js_1.NUM_TONES * 8));
+}
+
+});
+__def("synclayout", function (exports, require, module) {
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.syncMarkerPositions = syncMarkerPositions;
+exports.dataSymbolOffsets = dataSymbolOffsets;
+exports.distributeSync = distributeSync;
+/**
+ * Physical layout of sync markers within one burst: instead of clustering every alternating
+ * SYNC1/SYNC2 pair up front (a jarring block ahead of the musical 144-tone data), one pair is
+ * placed before each of `preamblePairs` evenly-sized data chunks -- pair, chunk, pair, chunk...
+ * The very first pair still lands at burst position 0, so the streaming/off-grid receiver
+ * (rx.ts) keeps its existing clock-lock edge unchanged; any later pair that lands mid-burst is
+ * already tolerated by rx.ts's existing erasure handling (any symbol >127 is treated as a lost
+ * data slot). Total marker/data/idle symbol count is unchanged, so burst duration is unchanged.
+ * tx.ts (encode) and fold.ts/tune.ts (decode) must all agree on this layout.
+ */
+function chunkSize(dataSymbols, preamblePairs) {
+    return Math.ceil(dataSymbols / preamblePairs);
+}
+/** Symbol-index positions (within one burst, 0-based) holding a sync marker, alternating
+ * SYM_SYNC_1 (even index) / SYM_SYNC_2 (odd index). */
+function syncMarkerPositions(dataSymbols, preamblePairs) {
+    const size = chunkSize(dataSymbols, preamblePairs);
+    const positions = [];
+    let pos = 0;
+    for (let i = 0; i < preamblePairs; i++) {
+        positions.push(pos, pos + 1);
+        pos += 2 + Math.min(size, Math.max(0, dataSymbols - i * size));
+    }
+    return positions;
+}
+/** Physical burst offset of each logical data symbol -- inverse of `syncMarkerPositions`. */
+function dataSymbolOffsets(dataSymbols, preamblePairs) {
+    const size = chunkSize(dataSymbols, preamblePairs);
+    const offsets = new Array(dataSymbols);
+    let pos = 0;
+    let k = 0;
+    for (let i = 0; i < preamblePairs; i++) {
+        pos += 2;
+        const n = Math.min(size, Math.max(0, dataSymbols - i * size));
+        for (let j = 0; j < n; j++)
+            offsets[k++] = pos + j;
+        pos += n;
+    }
+    return offsets;
+}
+/** Splices sync markers between chunks of `dataSymbols`; inverse layout of `dataSymbolOffsets`. */
+function distributeSync(dataSymbols, preamblePairs, sync1, sync2) {
+    const size = chunkSize(dataSymbols.length, preamblePairs);
+    const out = [];
+    for (let i = 0; i < preamblePairs; i++) {
+        out.push(sync1, sync2);
+        out.push(...dataSymbols.slice(i * size, (i + 1) * size));
+    }
+    return out;
+}
+
+});
+__def("tx", function (exports, require, module) {
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.bytesToSymbols = bytesToSymbols;
+exports.textToSymbols = textToSymbols;
+exports.chatBytesToSymbols = chatBytesToSymbols;
+exports.modulateSymbols = modulateSymbols;
+exports.modulate = modulate;
+exports.modulateBytes = modulateBytes;
+exports.modulateChatMessage = modulateChatMessage;
+exports.modulateSchedule = modulateSchedule;
+exports.modulateScheduleBytes = modulateScheduleBytes;
+const config_js_1 = require("./config.js");
+const conv_js_1 = require("./conv.js");
+const framing_js_1 = require("./framing.js");
+const hamming_js_1 = require("./hamming.js");
+const interleave_js_1 = require("./interleave.js");
+const synclayout_js_1 = require("./synclayout.js");
+function hammingSymbols(data) {
+    const symbols = [];
+    for (const code of data) {
+        symbols.push((0, hamming_js_1.hammingEncode)((code >> 4) & 0x0f));
+        symbols.push((0, hamming_js_1.hammingEncode)(code & 0x0f));
+    }
+    return symbols;
+}
+function convSymbols(data, interleaverWidth, rate) {
+    const coded = (0, conv_js_1.convEncode)((0, framing_js_1.buildInfoBits)(data), rate);
+    // Pad to a whole number of symbols before interleaving so the receiver can invert it blindly.
+    const padded = new Uint8Array(Math.ceil(coded.length / config_js_1.BITS_PER_SYMBOL) * config_js_1.BITS_PER_SYMBOL);
+    padded.set(coded);
+    const shuffled = (0, interleave_js_1.interleave)(padded, interleaverWidth);
+    const symbols = [];
+    for (let i = 0; i < shuffled.length; i += config_js_1.BITS_PER_SYMBOL) {
+        let symbol = 0;
+        for (let b = 0; b < config_js_1.BITS_PER_SYMBOL; b++)
+            symbol |= shuffled[i + b] << (config_js_1.BITS_PER_SYMBOL - 1 - b);
+        symbols.push(symbol);
+    }
+    return symbols;
+}
+/** Generic/arbitrary-length path (e.g. plain `qnr tx` file encode): total length isn't known to
+ * the receiver ahead of time, so this keeps the classic leading preamble rather than the
+ * fixed-budget chat burst's scattered markers (see `chatBytesToSymbols`), which rx.ts's streaming
+ * decoder can only locate when it knows the burst's exact data-symbol count in advance. */
+function bytesToSymbols(data, mode = 'hamming', opts = {}) {
+    const { interleaverWidth = interleave_js_1.INTERLEAVER_WIDTH, preamblePairs = config_js_1.PREAMBLE_PAIRS, rate = 2 } = opts;
+    const symbols = [];
+    for (let i = 0; i < preamblePairs; i++)
+        symbols.push(config_js_1.SYM_SYNC_1, config_js_1.SYM_SYNC_2);
+    symbols.push(...(mode === 'conv' ? convSymbols(data, interleaverWidth, rate) : hammingSymbols(data)));
+    symbols.push(config_js_1.SYM_IDLE, config_js_1.SYM_IDLE, config_js_1.SYM_IDLE);
+    return symbols;
+}
+function textToSymbols(text, mode = 'hamming', opts = {}) {
+    return bytesToSymbols(Uint8Array.from(text, (character) => character.charCodeAt(0) & 0xff), mode, opts);
+}
+/**
+ * Fills the protocol's fixed data-symbol budget with whole repeats of `data`'s own coded unit
+ * instead of padding: the shorter the message, the more independent copies fit, so the
+ * receiver's LLR-combine buys extra weak-signal margin exactly where a short message can use
+ * it, while a full-length message (one copy, no room left over) behaves exactly as before.
+ */
+function tiledConvSymbols(data, interleaverWidth, rate, totalSymbols) {
+    const unit = convSymbols(data, interleaverWidth, rate);
+    const out = new Array(totalSymbols);
+    for (let i = 0; i < totalSymbols; i++)
+        out[i] = unit[i % unit.length];
+    return out;
+}
+function chatBytesToSymbols(data, totalSymbols, opts = {}) {
+    const { interleaverWidth = interleave_js_1.INTERLEAVER_WIDTH, preamblePairs = config_js_1.PREAMBLE_PAIRS, rate = 2 } = opts;
+    const coded = tiledConvSymbols(data, interleaverWidth, rate, totalSymbols);
+    const symbols = (0, synclayout_js_1.distributeSync)(coded, preamblePairs, config_js_1.SYM_SYNC_1, config_js_1.SYM_SYNC_2);
+    symbols.push(config_js_1.SYM_IDLE, config_js_1.SYM_IDLE, config_js_1.SYM_IDLE);
+    return symbols;
+}
+/** Continuous-phase MFSK so symbol transitions stay click-free. */
+function modulateSymbols(symbols, baud, amplitude = 0.5, sampleRate = config_js_1.SAMPLE_RATE) {
+    const spb = (0, config_js_1.symbolSamples)(baud, sampleRate);
+    const out = new Float32Array(symbols.length * spb);
+    let phase = 0;
+    let n = 0;
+    for (const symbol of symbols) {
+        const step = (2 * Math.PI * (0, config_js_1.toneFreq)(symbol)) / sampleRate;
+        for (let i = 0; i < spb; i++) {
+            out[n++] = amplitude * Math.sin(phase);
+            phase += step;
+            if (phase > 2 * Math.PI)
+                phase -= 2 * Math.PI;
+        }
+    }
+    const fade = Math.min(256, spb);
+    for (let i = 0; i < fade; i++) {
+        const g = i / fade;
+        out[i] *= g;
+        out[out.length - 1 - i] *= g;
+    }
+    return out;
+}
+function modulate(text, baud, amplitude = 0.5, sampleRate = config_js_1.SAMPLE_RATE, mode = 'hamming', opts = {}) {
+    return modulateBytes(Uint8Array.from(text, (character) => character.charCodeAt(0) & 0xff), baud, amplitude, sampleRate, mode, opts);
+}
+function modulateBytes(data, baud, amplitude = 0.5, sampleRate = config_js_1.SAMPLE_RATE, mode = 'hamming', opts = {}) {
+    return modulateSymbols(bytesToSymbols(data, mode, opts), baud, amplitude, sampleRate);
+}
+/** Chat burst with the tiered-repeat fill (see `chatBytesToSymbols`), fixed at `totalSymbols`. */
+function modulateChatMessage(data, totalSymbols, baud, amplitude = 0.5, sampleRate = config_js_1.SAMPLE_RATE, opts = {}) {
+    return modulateSymbols(chatBytesToSymbols(data, totalSymbols, opts), baud, amplitude, sampleRate);
+}
+/** send-listen-send-listen: identical bursts separated by exact-length listening gaps. */
+function modulateSchedule(text, baud, repeats, gapSeconds, amplitude = 0.5, sampleRate = config_js_1.SAMPLE_RATE, opts = {}) {
+    return modulateScheduleBytes(Uint8Array.from(text, (character) => character.charCodeAt(0) & 0xff), baud, repeats, gapSeconds, amplitude, sampleRate, opts);
+}
+function modulateScheduleBytes(data, baud, repeats, gapSeconds, amplitude = 0.5, sampleRate = config_js_1.SAMPLE_RATE, opts = {}) {
+    const burst = modulateBytes(data, baud, amplitude, sampleRate, 'conv', opts);
+    const gap = Math.round(gapSeconds * sampleRate);
+    const out = new Float32Array(repeats * burst.length + (repeats - 1) * gap);
+    for (let r = 0; r < repeats; r++)
+        out.set(burst, r * (burst.length + gap));
+    return out;
+}
+
+});
+__def("webmodem", function (exports, require, module) {
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.clean = exports.info = void 0;
+exports.burst = burst;
+exports.schedule = schedule;
+exports.simulate = simulate;
+exports.decode = decode;
+exports.liveReceiver = liveReceiver;
+const config_js_1 = require("./config.js");
+const channel_js_1 = require("./channel.js");
+const fold_js_1 = require("./fold.js");
+const packet_js_1 = require("./packet.js");
+const protocol_js_1 = require("./protocol.js");
+const rx_js_1 = require("./rx.js");
+const tx_js_1 = require("./tx.js");
+/**
+ * Browser-facing facade. Imports only the pure-DSP modules -- nothing that touches
+ * node:worker_threads, node:child_process or the filesystem -- so the identical, tested modem
+ * code that runs in the CLI can be bundled for a web page. The multi-threaded `search.ts` path
+ * is deliberately not used here; the browser gets the single-threaded `foldDecodeAll`.
+ */
+exports.info = {
+    sampleRate: config_js_1.SAMPLE_RATE,
+    baud: protocol_js_1.BAUD,
+    tones: config_js_1.NUM_TONES,
+    payloadBytes: packet_js_1.CHAT_PAYLOAD_BYTES,
+    repeats: protocol_js_1.REPEATS,
+    liveFoldRepeats: protocol_js_1.LIVE_FOLD_REPEATS,
+    burstSeconds: protocol_js_1.BURST_SAMPLES / config_js_1.SAMPLE_RATE,
+    slotSeconds: protocol_js_1.SLOT_SAMPLES / config_js_1.SAMPLE_RATE,
+    periodSeconds: protocol_js_1.PERIOD_SAMPLES / config_js_1.SAMPLE_RATE,
+    lowHz: (0, config_js_1.toneFreq)(0),
+    highHz: (0, config_js_1.toneFreq)(config_js_1.NUM_TONES - 1),
+    summary: (0, protocol_js_1.summary)(),
+    profiles: Object.keys(channel_js_1.ITU_PROFILES),
+};
+const clean = (text) => (0, packet_js_1.decodeChatMessage)((0, packet_js_1.encodeChatMessage)(text)) ?? '';
+exports.clean = clean;
+/** One burst of the fixed chat protocol, ready to hand to Web Audio. */
+function burst(text) {
+    return (0, tx_js_1.modulateChatMessage)((0, packet_js_1.encodeChatMessage)(text), protocol_js_1.DATA_SYMBOLS, protocol_js_1.BAUD, protocol_js_1.AMPLITUDE, config_js_1.SAMPLE_RATE, protocol_js_1.FRAME_OPTIONS);
+}
+/** `repeats` bursts laid out on the protocol's own tx/rx period grid. */
+function schedule(text, repeats) {
+    const one = burst(text);
+    const count = Math.max(1, Math.min(protocol_js_1.REPEATS, Math.round(repeats)));
+    const out = new Float32Array((count - 1) * protocol_js_1.PERIOD_SAMPLES + protocol_js_1.GUARD_SAMPLES + one.length + protocol_js_1.GUARD_SAMPLES);
+    for (let i = 0; i < count; i++)
+        out.set(one, i * protocol_js_1.PERIOD_SAMPLES + protocol_js_1.GUARD_SAMPLES);
+    return out;
+}
+/** Adds the same Watterson/AWGN test channel the CLI's `--snr`/`--profile` flags use. */
+function simulate(samples, reference, opts) {
+    return (0, channel_js_1.applyChannel)(samples, {
+        sampleRate: config_js_1.SAMPLE_RATE,
+        snrDb: opts.snrDb,
+        profile: opts.profile ? (channel_js_1.ITU_PROFILES[opts.profile] ?? null) : null,
+        seed: opts.seed ?? 1,
+        referencePower: (0, channel_js_1.meanPower)(reference),
+    });
+}
+/** Weak-signal folded decode of a whole recording (single-threaded browser path). */
+function decode(samples) {
+    const out = [];
+    for (const hit of (0, fold_js_1.foldDecodeAll)(samples, protocol_js_1.DECODE_OPTIONS)) {
+        const text = (0, packet_js_1.decodeChatMessage)(hit.text);
+        if (text)
+            out.push({ text, bursts: hit.bursts ?? 1, offsetHz: hit.offsetHz, driftPpm: hit.driftPpm });
+    }
+    return out;
+}
+/**
+ * Streaming single-burst receiver for loud/off-grid signals, fed from a live microphone. This
+ * is the same class the CLI station uses for its direct decode path.
+ */
+function liveReceiver(onText) {
+    let pending = '';
+    const rx = new rx_js_1.Receiver(protocol_js_1.BAUD, {
+        onChar: (character) => {
+            pending += character;
+        },
+        onFrame: (frame) => {
+            const text = frame.ok ? (0, packet_js_1.decodeChatMessage)(pending) : undefined;
+            pending = '';
+            if (text)
+                onText(text);
+        },
+    }, config_js_1.SAMPLE_RATE, 'conv', {
+        interleaverWidth: protocol_js_1.FRAME_OPTIONS.interleaverWidth,
+        rate: protocol_js_1.FRAME_OPTIONS.rate,
+        combineRepeats: false,
+        maxPayloadBytes: protocol_js_1.PAYLOAD_BYTES,
+        dataSymbols: protocol_js_1.DATA_SYMBOLS,
+        preamblePairs: protocol_js_1.FRAME_OPTIONS.preamblePairs,
+    });
+    return { push: (block) => rx.push(block) };
+}
+
+});
+  self.QNR = __req('webmodem');
+})();
+</script>
+<script>/* QNR-144 web station: self-contained terminal + Web Audio front end for the bundled modem. */
+(function () {
+  'use strict';
+
+  // One copy of the modem source boots this thread and the decode worker.
+  var MODEM_SRC = document.getElementById('qnr-modem').textContent;
+  new Function(MODEM_SRC)();
+
+  var M = self.QNR;
+  var RATE = M.info.sampleRate;
+
+  /* ------------------------------------------------------------ decode worker */
+
+  /**
+   * The folded search is hundreds of milliseconds to tens of seconds of straight-line maths.
+   * Running it on the main thread froze the page, so it runs in a Worker built from the same
+   * inlined source -- no second file, no network fetch.
+   */
+  var worker = null, jobId = 0, jobs = {};
+
+  function workerGlue() {
+    self.onmessage = function (e) {
+      var m = e.data, t0 = Date.now();
+      try {
+        var Q = self.QNR, samples;
+        if (m.cmd === 'decode') samples = new Float32Array(m.samples);
+        else {
+          samples = Q.schedule(m.message, m.repeats);
+          if (m.cmd === 'sim') samples = Q.simulate(samples, Q.burst(m.message), { snrDb: m.snrDb, profile: m.profile, seed: m.seed });
+        }
+        self.postMessage({ id: m.id, ok: true, hits: Q.decode(samples), ms: Date.now() - t0 });
+      } catch (err) {
+        self.postMessage({ id: m.id, ok: false, error: String(err && err.message ? err.message : err) });
+      }
+    };
+  }
+
+  function ensureWorker() {
+    if (worker) return worker;
+    var src = MODEM_SRC + '\n(' + workerGlue.toString() + ')();';
+    worker = new Worker(URL.createObjectURL(new Blob([src], { type: 'application/javascript' })));
+    worker.onmessage = function (e) {
+      var job = jobs[e.data.id];
+      if (!job) return;
+      delete jobs[e.data.id];
+      job(e.data);
+    };
+    return worker;
+  }
+
+  function job(request) {
+    return new Promise(function (resolve, reject) {
+      var w;
+      try { w = ensureWorker(); } catch (e) { reject(new Error('Web Workers unavailable: ' + e.message)); return; }
+      var id = ++jobId;
+      jobs[id] = function (msg) { msg.ok ? resolve(msg) : reject(new Error(msg.error)); };
+      request.id = id;
+      w.postMessage(request);
+    });
+  }
+
+  /* ---------------------------------------------------------------- terminal */
+
+  var outEl = document.getElementById('out');
+  var inputEl = document.getElementById('input');
+  var termEl = document.getElementById('term');
+  var promptEl = document.getElementById('prompt');
+  var buffer = '';
+  var history = [];
+  var histAt = 0;
+  var busy = false;
+
+  function write(text, cls) {
+    var line = document.createElement('span');
+    line.className = 'l' + (cls ? ' ' + cls : '');
+    line.textContent = text;
+    outEl.appendChild(line);
+    // Keep the DOM bounded; a long session should not grow without limit.
+    while (outEl.childNodes.length > 800) outEl.removeChild(outEl.firstChild);
+    termEl.scrollTop = termEl.scrollHeight;
+  }
+
+  function redraw() { inputEl.textContent = buffer; }
+
+  function setBusy(state, label) {
+    busy = state;
+    promptEl.textContent = state ? (label || 'working') + '...' : 'qnr>';
+  }
+
+  /** Live elapsed counter on its own line, so a long decode never looks like a hang. */
+  function ticker(label) {
+    var el = document.createElement('span');
+    el.className = 'l c-dim';
+    outEl.appendChild(el);
+    var t0 = Date.now();
+    var paint = function () { el.textContent = label + ' ... ' + ((Date.now() - t0) / 1000).toFixed(1) + ' s'; };
+    paint();
+    termEl.scrollTop = termEl.scrollHeight;
+    var timer = setInterval(paint, 100);
+    return { stop: function () { clearInterval(timer); paint(); } };
+  }
+
+  var COMMANDS = {};
+
+  function run(text) {
+    var trimmed = text.trim();
+    write('qnr> ' + text, 'c-dim');
+    if (!trimmed) return;
+    history.push(trimmed);
+    if (history.length > 100) history.shift();
+    histAt = history.length;
+
+    var space = trimmed.indexOf(' ');
+    var name = (space < 0 ? trimmed : trimmed.slice(0, space)).toLowerCase();
+    var rest = space < 0 ? '' : trimmed.slice(space + 1).trim();
+    var cmd = COMMANDS[name];
+    if (!cmd) { write("unknown command '" + name + "' - try: help", 'c-red'); return; }
+    try {
+      var result = cmd.run(rest);
+      if (result && typeof result.catch === 'function') {
+        result.catch(function (e) { write('error: ' + (e && e.message ? e.message : e), 'c-red'); setBusy(false); });
+      }
+    } catch (e) {
+      write('error: ' + (e && e.message ? e.message : e), 'c-red');
+      setBusy(false);
+    }
+  }
+
+  document.addEventListener('keydown', function (e) {
+    if (e.metaKey || e.ctrlKey) {
+      if (e.key === 'l') { e.preventDefault(); outEl.textContent = ''; }
+      return;
+    }
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      var text = buffer; buffer = ''; redraw(); run(text);
+    } else if (e.key === 'Backspace') {
+      e.preventDefault(); buffer = buffer.slice(0, -1); redraw();
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (histAt > 0) { histAt--; buffer = history[histAt] || ''; redraw(); }
+    } else if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      if (histAt < history.length - 1) { histAt++; buffer = history[histAt] || ''; }
+      else { histAt = history.length; buffer = ''; }
+      redraw();
+    } else if (e.key === 'Tab') {
+      e.preventDefault();
+      var hits = Object.keys(COMMANDS).filter(function (k) { return k.indexOf(buffer) === 0; });
+      if (hits.length === 1) { buffer = hits[0] + ' '; redraw(); }
+      else if (hits.length > 1) write(hits.join('  '), 'c-dim');
+    } else if (e.key.length === 1) {
+      buffer += e.key; redraw();
+    }
+  });
+
+  termEl.addEventListener('click', function () { termEl.focus(); });
+  Array.prototype.forEach.call(document.querySelectorAll('footer button'), function (b) {
+    b.addEventListener('click', function () { termEl.focus(); run(b.dataset.cmd); });
+  });
+
+  /* ------------------------------------------------------------------ meters */
+
+  var inBar = document.getElementById('inbar'), inDb = document.getElementById('indb');
+  var outBar = document.getElementById('outbar'), outDb = document.getElementById('outdb');
+  var rateEl = document.getElementById('ctxrate');
+  var canvas = document.getElementById('spectrum');
+  var ctx2d = canvas.getContext('2d');
+
+  function showLevel(bar, label, db) {
+    var norm = Math.max(0, Math.min(1, (db + 60) / 60));
+    bar.style.width = (norm * 100).toFixed(1) + '%';
+    label.textContent = db <= -60 ? '-inf' : db.toFixed(1) + ' dB';
+  }
+
+  function dbOf(block) {
+    var sum = 0;
+    for (var i = 0; i < block.length; i++) sum += block[i] * block[i];
+    return 20 * Math.log10(Math.max(Math.sqrt(sum / Math.max(block.length, 1)), 1e-6));
+  }
+
+  function drawSpectrum(freqData) {
+    var w = canvas.width, h = canvas.height;
+    ctx2d.fillStyle = '#070a0c';
+    ctx2d.fillRect(0, 0, w, h);
+    if (!freqData) return;
+    // Show only the modem's own passband, so the display matches the tone comb.
+    var lo = Math.floor((M.info.lowHz / (RATE / 2)) * freqData.length);
+    var hi = Math.ceil((M.info.highHz / (RATE / 2)) * freqData.length);
+    var span = Math.max(1, hi - lo);
+    for (var x = 0; x < w; x++) {
+      var v = freqData[lo + Math.floor((x / w) * span)];
+      if (v === undefined) continue;
+      var mag = Math.max(0, Math.min(1, (v + 100) / 70));
+      ctx2d.fillStyle = 'rgb(' + Math.round(60 + mag * 40) + ',' + Math.round(80 + mag * 160) + ',' + Math.round(100 + mag * 60) + ')';
+      ctx2d.fillRect(x, h - mag * h, 1, mag * h);
+    }
+  }
+
+  /* ------------------------------------------------------------------- audio */
+
+  var audio = null, micStream = null, micNode = null, analyser = null, receiver = null, sinkId = null;
+
+  function context() {
+    if (!audio) {
+      var Ctor = window.AudioContext || window.webkitAudioContext;
+      if (!Ctor) throw new Error('this browser has no Web Audio support');
+      audio = new Ctor({ sampleRate: RATE });
+      rateEl.textContent = 'audio: ' + audio.sampleRate + ' Hz';
+      if (Math.abs(audio.sampleRate - RATE) > 1) {
+        write('warning: browser gave ' + audio.sampleRate + ' Hz, not ' + RATE + ' Hz.', 'c-amber');
+        write('  tones are generated at the context rate, so two browsers at different rates', 'c-amber');
+        write('  will still interoperate, but a WAV exported here is at ' + audio.sampleRate + ' Hz.', 'c-amber');
+      }
+    }
+    if (audio.state === 'suspended') audio.resume();
+    return audio;
+  }
+
+  function play(samples) {
+    var ac = context();
+    return new Promise(function (resolve, reject) {
+      var buf = ac.createBuffer(1, samples.length, ac.sampleRate);
+      buf.copyToChannel(samples, 0);
+      var src = ac.createBufferSource();
+      src.buffer = buf;
+      var gain = ac.createGain();
+      src.connect(gain).connect(ac.destination);
+      var peak = 0;
+      for (var i = 0; i < samples.length; i += 64) peak = Math.max(peak, Math.abs(samples[i]));
+      showLevel(outBar, outDb, 20 * Math.log10(Math.max(peak, 1e-6)));
+      src.onended = function () { showLevel(outBar, outDb, -60); resolve(); };
+      try { src.start(); } catch (e) { reject(e); }
+    });
+  }
+
+  function setSink() {
+    if (!sinkId || !audio || typeof audio.setSinkId !== 'function') return Promise.resolve(false);
+    return audio.setSinkId(sinkId).then(function () { return true; }, function () { return false; });
+  }
+
+  async function micOn() {
+    if (micStream) { write('mic already on', 'c-amber'); return; }
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw new Error('no microphone API in this browser');
+    var ac = context();
+    // Every one of these would destroy a weak MFSK signal, so they are all disabled.
+    micStream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: false, noiseSuppression: false, autoGainControl: false,
+        channelCount: 1, sampleRate: RATE
+      }
+    });
+    var source = ac.createMediaStreamSource(micStream);
+    analyser = ac.createAnalyser();
+    analyser.fftSize = 2048;
+    source.connect(analyser);
+
+    receiver = M.liveReceiver(function (text) {
+      write('  >> "' + text + '"   [CRC OK]  ' + new Date().toLocaleTimeString(), 'c-rx');
+    });
+
+    var size = 4096;
+    if (ac.audioWorklet && window.AudioWorkletNode) {
+      var code = 'class P extends AudioWorkletProcessor{process(i){if(i[0]&&i[0][0])this.port.postMessage(i[0][0].slice());return true}}registerProcessor("qnr-tap",P)';
+      var url = URL.createObjectURL(new Blob([code], { type: 'application/javascript' }));
+      await ac.audioWorklet.addModule(url);
+      URL.revokeObjectURL(url);
+      micNode = new AudioWorkletNode(ac, 'qnr-tap');
+      micNode.port.onmessage = function (e) { onBlock(e.data); };
+      source.connect(micNode);
+      write('mic on (AudioWorklet, ' + ac.sampleRate + ' Hz) - listening for bursts', 'c-green');
+    } else {
+      micNode = ac.createScriptProcessor(size, 1, 1);
+      micNode.onaudioprocess = function (e) { onBlock(new Float32Array(e.inputBuffer.getChannelData(0))); };
+      source.connect(micNode);
+      micNode.connect(ac.destination);
+      write('mic on (ScriptProcessor fallback, ' + ac.sampleRate + ' Hz)', 'c-amber');
+    }
+  }
+
+  var freqScratch = null;
+  function onBlock(block) {
+    showLevel(inBar, inDb, dbOf(block));
+    if (receiver) receiver.push(block);
+    if (analyser) {
+      if (!freqScratch) freqScratch = new Float32Array(analyser.frequencyBinCount);
+      analyser.getFloatFrequencyData(freqScratch);
+      drawSpectrum(freqScratch);
+    }
+  }
+
+  function micOff() {
+    if (!micStream) { write('mic is not on', 'c-amber'); return; }
+    if (micNode) { try { micNode.disconnect(); } catch (e) { /* already gone */ } }
+    micStream.getTracks().forEach(function (t) { t.stop(); });
+    micStream = null; micNode = null; receiver = null; analyser = null;
+    showLevel(inBar, inDb, -60);
+    drawSpectrum(null);
+    write('mic off', 'c-amber');
+  }
+
+  /* ---------------------------------------------------------------- commands */
+
+  function def(name, help, fn) { COMMANDS[name] = { help: help, run: fn }; }
+
+  def('help', 'this list', function () {
+    write('');
+    Object.keys(COMMANDS).forEach(function (k) { write('  ' + k.padEnd(22) + COMMANDS[k].help); });
+    write('');
+    write('  The DSP here is the same TypeScript that runs the command-line station:', 'c-dim');
+    write('  144-tone MFSK, K=7 rate-1/3 convolutional coding, soft-decision Viterbi,', 'c-dim');
+    write('  CRC-16, and folded repeat correlation. Nothing is loaded from a network.', 'c-dim');
+    write('');
+  });
+
+  def('info', 'protocol parameters', function () {
+    write('');
+    M.info.summary.split('\n').forEach(function (l) { write('  ' + l, 'c-cyan'); });
+    write('');
+    write('  burst ' + M.info.burstSeconds.toFixed(2) + ' s   slot ' + M.info.slotSeconds.toFixed(2) +
+      ' s   period ' + M.info.periodSeconds.toFixed(2) + ' s');
+    write('  payload up to ' + M.info.payloadBytes + ' printable ASCII characters');
+    write('');
+  });
+
+  def('clear', 'clear the screen', function () { outEl.textContent = ''; });
+
+  def('devices', 'list audio inputs and outputs', async function () {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) throw new Error('no device API in this browser');
+    var list = await navigator.mediaDevices.enumerateDevices();
+    var named = list.some(function (d) { return d.label; });
+    if (!named) write('labels are hidden until microphone permission is granted - run: mic on', 'c-amber');
+    write('');
+    list.filter(function (d) { return d.kind === 'audioinput' || d.kind === 'audiooutput'; })
+      .forEach(function (d) {
+        write('  ' + d.kind.replace('audio', '').padEnd(7) + (d.label || '(unnamed)') + '   id=' + d.deviceId.slice(0, 12));
+      });
+    write('');
+    if (audio && typeof audio.setSinkId !== 'function') {
+      write('  note: this browser cannot pick an output device from script (Firefox/Safari).', 'c-amber');
+      write('  choose the output in the OS mixer instead; input selection still works.', 'c-amber');
+    }
+  });
+
+  def('out', 'out <deviceId> - choose output device (Chromium only)', async function (arg) {
+    if (!arg) throw new Error('usage: out <deviceId prefix from "devices">');
+    var list = await navigator.mediaDevices.enumerateDevices();
+    var hit = list.filter(function (d) { return d.kind === 'audiooutput' && d.deviceId.indexOf(arg) === 0; })[0];
+    if (!hit) throw new Error('no output device id starting with ' + arg);
+    sinkId = hit.deviceId;
+    context();
+    var ok = await setSink();
+    write(ok ? 'output -> ' + (hit.label || hit.deviceId) : 'this browser cannot switch output from script', ok ? 'c-green' : 'c-amber');
+  });
+
+  def('mic', 'mic on | mic off - live receive from the microphone', function (arg) {
+    if (arg === 'off') return micOff();
+    return micOn();
+  });
+
+  var fec = 2;
+  def('fec', 'fec <n> - repeats per message (1..' + M.info.repeats + ')', function (arg) {
+    if (arg) {
+      var n = Math.max(1, Math.min(M.info.repeats, parseInt(arg, 10) || 1));
+      fec = n;
+    }
+    write('FEC strength x' + fec + '  (' + (fec * M.info.periodSeconds).toFixed(0) + ' s on air)', 'c-cyan');
+  });
+
+  def('tx', 'tx <message> - transmit through the speakers', async function (arg) {
+    if (!arg) throw new Error('usage: tx CQ CQ DE QNR');
+    var text = M.clean(arg);
+    if (!text) throw new Error('need at least one printable ASCII character');
+    setBusy(true, 'tx');
+    await setSink();
+    var one = M.burst(text);
+    write('TX "' + text + '"  x' + fec + '  (' + M.info.burstSeconds.toFixed(1) + ' s per burst)', 'c-amber');
+    for (var i = 1; i <= fec; i++) {
+      write('  burst ' + i + '/' + fec, 'c-dim');
+      await play(one);
+      if (i < fec) await new Promise(function (r) { setTimeout(r, (M.info.periodSeconds - M.info.burstSeconds) * 1000); });
+    }
+    write('TX done', 'c-green');
+    setBusy(false);
+  });
+
+  def('tone', 'play a 1 kHz test tone to check audio routing', async function () {
+    var ac = context();
+    var n = Math.round(ac.sampleRate * 0.5), s = new Float32Array(n);
+    for (var i = 0; i < n; i++) s[i] = 0.4 * Math.sin((2 * Math.PI * 1000 * i) / ac.sampleRate);
+    await setSink();
+    await play(s);
+    write('test tone done', 'c-green');
+  });
+
+  def('selftest', 'encode then decode in memory, no audio', function () {
+    var msg = 'CQ CQ DE QNR';
+    setBusy(true, 'selftest');
+    var tick = ticker('  folding 2 bursts');
+    return job({ cmd: 'selftest', message: msg, repeats: 2 }).then(function (r) {
+      tick.stop();
+      var hit = r.hits.filter(function (h) { return h.text === msg; })[0];
+      write((hit ? 'PASS' : 'FAIL') + '  round trip "' + msg + '"  ' +
+        (hit ? '(' + hit.bursts + 'x LLR) ' : '') + r.ms + ' ms', hit ? 'c-green' : 'c-red');
+      setBusy(false);
+    }, function (e) { tick.stop(); setBusy(false); throw e; });
+  });
+
+  def('sim', 'sim <snrDb> [profile] - decode through a simulated HF channel', function (arg) {
+    var parts = arg.split(/\s+/).filter(Boolean);
+    var snr = parseFloat(parts[0]);
+    if (!isFinite(snr)) throw new Error('usage: sim -18 poor   (profiles: ' + M.info.profiles.join(', ') + ')');
+    var profile = parts[1] || null;
+    if (profile && M.info.profiles.indexOf(profile) < 0) throw new Error('unknown profile ' + profile);
+    var msg = 'CQ CQ DE QNR';
+    write('simulating ' + snr + ' dB SNR' + (profile ? ', CCIR ' + profile + ' fading' : ', AWGN only') + ', 4 bursts', 'c-dim');
+    setBusy(true, 'sim');
+    var tick = ticker('  searching tuning and clock drift');
+    return job({ cmd: 'sim', message: msg, repeats: 4, snrDb: snr, profile: profile, seed: 1 }).then(function (r) {
+      tick.stop();
+      var hit = r.hits.filter(function (h) { return h.text === msg; })[0];
+      if (hit) write('PASS  "' + hit.text + '"  ' + hit.bursts + 'x LLR, ' +
+        hit.offsetHz.toFixed(1) + ' Hz, ' + hit.driftPpm.toFixed(0) + ' ppm   ' + r.ms + ' ms', 'c-green');
+      else write('no decode at ' + snr + ' dB (' + r.ms + ' ms) - try a higher SNR', 'c-red');
+      setBusy(false);
+    }, function (e) { tick.stop(); setBusy(false); throw e; });
+  });
+
+  def('about', 'what this page is', function () {
+    write('');
+    write('  QNR-144 is a weak-signal chat modem for HF radio.', 'c-cyan');
+    write('  Point this page\'s audio at a transceiver (or just play it across a room)');
+    write('  and another station running the same page, or the qnr command-line');
+    write('  program, can decode it.');
+    write('');
+    write('  Everything runs locally: no server, no upload, no network requests.', 'c-dim');
+    write('');
+  });
+
+  /* -------------------------------------------------------------------- boot */
+
+  write('QNR-144  144-tone MFSK weak-signal chat modem', 'c-green');
+  write(M.info.tones + ' tones, ' + M.info.lowHz.toFixed(0) + '-' + M.info.highHz.toFixed(0) + ' Hz, ' +
+    M.info.baud + ' Bd, K=7 rate-1/3 + Viterbi, CRC-16', 'c-dim');
+  write('');
+  write('Type "help" for commands, or "selftest" to prove the DSP works right now.', 'c-cyan');
+  write('For live receive use "mic on"; to transmit, "tx CQ CQ DE QNR".');
+  write('');
+  showLevel(inBar, inDb, -60);
+  showLevel(outBar, outDb, -60);
+  drawSpectrum(null);
+  redraw();
+  termEl.focus();
+})();
+</script>
+</body>
+</html>

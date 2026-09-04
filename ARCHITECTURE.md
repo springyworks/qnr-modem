@@ -172,9 +172,37 @@ noise). Everywhere else, the process should be receiving:
 
 A **receive-only station is always in `LISTEN`**: for it, every basic-frame,
 occupied or not, gets a decode attempt, forever. Both `qnr rx` and plain `qnr` tie
-their weak-signal redecode cadence to `T_slot` (`SLOT_SAMPLES` in
-[src/protocol.ts](src/protocol.ts)), so there is genuinely one attempt per elementary
-slot, while their direct path stays ready for loud off-grid packets at any time.
+their weak-signal redecode cadence to the period (`LIVE_DECODE_SAMPLES` in
+[src/protocol.ts](src/protocol.ts)), so there is one folded attempt per transmitted
+burst, while their direct path stays ready for loud off-grid bursts at any time.
+
+### Why a live station folds less deeply than a transmitter sends
+
+The state machine above says the decoder runs "in every state except KEY_TX", and
+that is not just tidiness — it is a hard real-time constraint that was found the
+expensive way. The folded search saturates the whole worker pool. If a fold overruns
+its cycle, or runs while the station is keying, the main thread stops feeding
+PipeWire and **the transmitted audio audibly breaks up**.
+
+So two limits are separate on purpose:
+
+| | Constant | Value | Set by |
+|---|---|---|---|
+| How many repeats a station may **send** | `REPEATS` | 60 | air time you are willing to spend |
+| How deep a **live** receiver folds | `LIVE_FOLD_REPEATS` | 4 | what fits in one period on this CPU |
+
+Measured worst case (idle noise, so no early exit) on 12 cores with 9 live worker
+threads: depth 1 → 11.6 s, depth 2 → 14.5 s, depth 4 → 20.4 s, against a 27.8 s
+per-period budget. Depth 4 fits with headroom; the earlier arrangement folded ~28
+minutes of ring every 14 s and never finished at all.
+
+The consequence is honest and worth stating: **a live station does not realise the
+full 60-repeat weak-signal gain.** To get that, record the audio and decode it
+offline with `qnr rx -i file.wav`, which may take as long as it likes because
+nothing is being transmitted while it runs. Closing that gap for live operation
+would need a persistent LLR accumulator that survives across folds instead of
+re-folding a growing ring — a real design change, not a bigger constant.
+
 
 ## 6. World time as the sync anchor
 
@@ -219,8 +247,12 @@ output level, and queue depth.
 | Progressive decode ladder (1, 2, 4, 8, 16, 32 bursts, then everything) | Implemented ([src/search.ts](src/search.ts)) |
 | Simultaneous TX + RX in one process (default `qnr`, no subcommand) | Implemented ([src/rxtx.ts](src/rxtx.ts)) |
 | Operator picks repeat count 1..`REPEATS` live, no receiver foreknowledge needed | Implemented (default `qnr`; `qnr tx` always sends the chosen count) |
-| Redecode cadence tied to `T_slot` (one attempt per basic-frame) | Implemented in both `qnr rx` and default `qnr` |
+| Redecode cadence tied to the period (one attempt per transmitted burst) | Implemented in both `qnr rx` and default `qnr` |
+| Decoder suspended while this station is keyed, so TX audio never breaks up | Implemented ([src/live.ts](src/live.ts) `setPaused`, called from [src/rxtx.ts](src/rxtx.ts)) |
 | Full-screen RX/TX TUI | Implemented with Blessed in `qnr -tui` |
 | Continuous LLR folding in live `rx` | Implemented, including TX/RX phases and loud off-grid fallback |
+| Whole modem as one self-contained web page | Implemented (`npm run build:web` -> `docs/index.html`) |
+| Live station folding as deep as a transmitter can send (needs a persistent LLR accumulator) | Proposed (§5) |
+| 5 s burst / 5 s slot as originally specified | **Not met** - see `npm run requirements`; needs a payload/coding-rate trade |
 | Shared/contended slot B for a far third station | Proposed (§3) |
 | Fixed three-station rota | Proposed, would require a protocol version change (§3) |

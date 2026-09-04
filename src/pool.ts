@@ -8,6 +8,18 @@ export const workerCount = (): number => {
   return Math.max(1, availableParallelism() - 1);
 };
 
+/**
+ * Decoder threads for a station that is also playing and capturing audio. The offline default
+ * (cores - 1) leaves nothing for the main thread to feed PipeWire with, and the outgoing burst
+ * audibly breaks up while a fold is running, so a live station gives up two more cores.
+ * `--jobs=N` still overrides.
+ */
+export const liveWorkerCount = (): number => {
+  const override = process.argv.find((a) => a.startsWith('--jobs='))?.slice(7);
+  if (override) return Math.max(1, Number(override) || 1);
+  return Math.max(1, availableParallelism() - 3);
+};
+
 /** Runs tasks across a persistent worker pool; results come back in task order. */
 export function runTasks<T, R>(workerUrl: URL, tasks: T[]): Promise<R[]> {
   return new Promise((resolve, reject) => {
@@ -59,11 +71,6 @@ export function runTasks<T, R>(workerUrl: URL, tasks: T[]): Promise<R[]> {
     }
   });
 }
-
-export const CELL_WORKER = new URL('./worker.js', import.meta.url);
-export const REPEAT_WORKER = new URL('./repeatWorker.js', import.meta.url);
-
-export const runCells = (tasks: unknown[]): Promise<number[]> => runTasks<unknown, number>(CELL_WORKER, tasks);
 
 /**
  * Long-lived pool for the receiver, which decodes the same audio again every few seconds.

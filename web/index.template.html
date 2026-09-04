@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>QNR-144 &mdash; 144-tone MFSK weak-signal modem</title>
+<meta name="description" content="QNR-144: a 144-tone MFSK weak-signal HF chat modem running entirely in the browser.">
+<style>/*__CSS__*/</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <h1>QNR&#8209;144</h1>
+    <span class="sub">144&#8209;tone MFSK weak&#8209;signal chat modem &mdash; running in your browser</span>
+    <span class="spacer"></span>
+    <span id="ctxrate" class="pill" title="Audio context sample rate">audio: idle</span>
+  </header>
+
+  <div id="meters">
+    <div class="meter"><label>IN</label><div class="bar"><i id="inbar"></i></div><span id="indb">&mdash;</span></div>
+    <div class="meter"><label>OUT</label><div class="bar"><i id="outbar"></i></div><span id="outdb">&mdash;</span></div>
+    <canvas id="spectrum" width="512" height="64" title="Received tone spectrum"></canvas>
+  </div>
+
+  <div id="term" tabindex="0" role="log" aria-label="QNR terminal">
+    <div id="out"></div>
+    <div id="line"><span id="prompt">qnr&gt;</span><span id="input"></span><span id="cursor">&#9608;</span></div>
+  </div>
+
+  <footer>
+    <button data-cmd="help">help</button>
+    <button data-cmd="info">info</button>
+    <button data-cmd="devices">devices</button>
+    <button data-cmd="mic on">mic on</button>
+    <button data-cmd="selftest">selftest</button>
+    <button data-cmd="sim -18 poor">sim -18 poor</button>
+    <span class="hint">click the terminal and type &mdash; <kbd>Tab</kbd> completes, <kbd>&uarr;</kbd> recalls</span>
+  </footer>
+</div>
+
+<!-- The modem is emitted as inert text so exactly one copy boots both the main thread and the
+     decode Worker, keeping the page a single self-contained file. -->
+<script type="text/plain" id="qnr-modem">/*__MODEM__*/</script>
+<script>/*__APP__*/</script>
+</body>
+</html>

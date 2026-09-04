@@ -4,13 +4,14 @@ import { ITU_PROFILES, applyChannel, meanPower } from './channel.js';
 import { SAMPLE_RATE } from './config.js';
 import { ContinuousReceiver, type HeardFrame } from './live.js';
 import { CHAT_PAYLOAD_BYTES, decodeChatMessage, encodeChatMessage } from './packet.js';
-import { workerCount } from './pool.js';
-import { AMPLITUDE, BAUD, DATA_SYMBOLS, FRAME_OPTIONS, GUARD_SAMPLES, PERIOD_SAMPLES, REPEATS, SLOT_SAMPLES } from './protocol.js';
+import { liveWorkerCount } from './pool.js';
+import { AMPLITUDE, BAUD, DATA_SYMBOLS, FRAME_OPTIONS, GUARD_SAMPLES, LIVE_DECODE_SAMPLES, PERIOD_SAMPLES, REPEATS } from './protocol.js';
 import { StationDashboard, type TxDashboardState } from './stationUi.js';
 import { modulateChatMessage } from './tx.js';
 
-/** One decode attempt per elementary time-slot, so a receive-only station covers every basic-frame. */
-const SLOT_MS = (SLOT_SAMPLES / SAMPLE_RATE) * 1000;
+/** One decode attempt per period, which is one attempt per transmitted burst. A worst-case
+ * (idle-noise, no early exit) fold measures ~20 s, so a per-slot cadence would overrun. */
+const DECODE_MS = (LIVE_DECODE_SAMPLES / SAMPLE_RATE) * 1000;
 /** Default FEC strength: this many identical bursts sent back-to-back for one message. */
 const DEFAULT_FEC_LEVEL = 2;
 /** [Tune] menu item: a plain audio-chain test tone, not a protocol frame. */
@@ -68,7 +69,7 @@ export interface RxTxOptions {
  * never needs to be told how many were sent; it just folds whatever it hears.
  */
 export function runRxTx(opts: RxTxOptions): void {
-  const jobs = workerCount();
+  const jobs = liveWorkerCount();
   const identity = createAudioIdentity();
   const messageQueue: string[] = [];
   let sending = false;
@@ -170,7 +171,14 @@ export function runRxTx(opts: RxTxOptions): void {
         txStatus = `burst ${repeat}/${fecLevel} - "${message}"`;
         renderTx();
         log(`  TX ${repeat}/${fecLevel}  "${message}"${offGrid ? '  [off-grid]' : ''}`, 'red');
-        await playback?.play(burst);
+        // The folded search would otherwise hold every worker thread while this burst is being
+        // written to PipeWire, starving the writer and breaking the transmitted tone up.
+        receiver.setPaused(true);
+        try {
+          await playback?.play(burst);
+        } finally {
+          receiver.setPaused(false);
+        }
         if (repeat < fecLevel) {
           txStatus = 'listening between repeats';
           renderTx();
@@ -301,7 +309,7 @@ export function runRxTx(opts: RxTxOptions): void {
     identity,
     onError: (error) => log(`capture error: ${error.message}`, 'red'),
   });
-  decodeTimer = setInterval(() => void receiver.decode(), SLOT_MS);
+  decodeTimer = setInterval(() => void receiver.decode(), DECODE_MS);
   process.on('SIGINT', stop);
 
   if (opts.message) queueMessage(opts.message);

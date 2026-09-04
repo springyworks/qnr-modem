@@ -9,13 +9,18 @@
   },
   "scripts": {
     "build": "tsc && chmod +x dist/cli.js",
+    "build:web": "tsc -p tsconfig.web.json && node tools/buildWeb.mjs",
     "watch": "tsc --watch",
     "start": "node dist/cli.js",
+    "tui": "node dist/cli.js -tui",
     "tx": "node dist/cli.js tx",
     "rx": "node dist/cli.js rx",
-    "rxtx": "node dist/cli.js rxtx",
     "selftest": "node dist/selftest.js",
-    "integration": "node dist/integration.js"
+    "integration": "node dist/integration.js",
+    "fasttest": "node dist/fastSelfTest.js",
+    "requirements": "node dist/requirements.js",
+    "snrprobe": "node dist/snrProbe.js",
+    "wsprprobe": "node dist/wsprProbe.js"
   },
   "dependencies": {
     "blessed": "^0.1.81"

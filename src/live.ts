@@ -8,19 +8,19 @@ import {
   FRAME_OPTIONS,
   GUARD_SAMPLES,
   INTERLEAVER_WIDTH,
+  LIVE_FOLD_REPEATS,
+  LIVE_RING_SAMPLES,
   PAYLOAD_BYTES,
   PERIOD_SAMPLES,
   RATE,
-  REPEATS,
-  SCHEDULE_SAMPLES,
   SLOT_SAMPLES,
 } from './protocol.js';
 import { Receiver, type RxState } from './rx.js';
 import { DecodeSearch, type SearchProgress, type SearchResult } from './search.js';
 
-const RING_CAPACITY = SCHEDULE_SAMPLES + PERIOD_SAMPLES;
+const RING_CAPACITY = LIVE_RING_SAMPLES;
 const MIN_DECODE_SAMPLES = BURST_SAMPLES + GUARD_SAMPLES;
-const DUPLICATE_WINDOW_MS = (SCHEDULE_SAMPLES / SAMPLE_RATE) * 1000;
+const DUPLICATE_WINDOW_MS = (LIVE_RING_SAMPLES / SAMPLE_RATE) * 1000;
 
 export type FrameLane = 'tx' | 'rx' | 'unsynced';
 export type DecodeSource = 'folded' | 'loud';
@@ -92,6 +92,7 @@ export class ContinuousReceiver {
   private inputDb = -100;
   private peakDb = -100;
   private decoding = false;
+  private paused = false;
   private progress = 'waiting for a complete burst';
   private evidence = 'no repeat evidence yet';
   private foldedBursts = 0;
@@ -151,9 +152,19 @@ export class ContinuousReceiver {
     this.publishStatus();
   }
 
+  /**
+   * Half-duplex reality: while this station is keying its own burst there is nothing worth
+   * decoding (it would just be hearing itself), and letting the search keep the whole worker
+   * pool busy starves the main thread that feeds PipeWire, which breaks up the outgoing audio.
+   * The cheap streaming direct receiver keeps running regardless.
+   */
+  setPaused(paused: boolean): void {
+    this.paused = paused;
+  }
+
   /** Runs one full weak-signal search if a previous search is not already using the worker pool. */
   async decode(): Promise<void> {
-    if (this.decoding || this.filled < MIN_DECODE_SAMPLES) return;
+    if (this.paused || this.decoding || this.filled < MIN_DECODE_SAMPLES) return;
 
     this.decoding = true;
     this.progress = 'acquiring preamble';
@@ -195,7 +206,7 @@ export class ContinuousReceiver {
       directState: this.directState,
       evidence: this.evidence,
       foldedBursts: this.foldedBursts,
-      repeatTarget: REPEATS,
+      repeatTarget: LIVE_FOLD_REPEATS,
     };
   }
 
