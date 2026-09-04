@@ -27,6 +27,7 @@ import {
   summary,
 } from './protocol.js';
 import { runFastChat } from './fastchat.js';
+import { QNR_PAGE_URL } from './qr.js';
 import { runRxTx } from './rxtx.js';
 import { modulateChatMessage } from './tx.js';
 import { readWav, writeWav16 } from './wav.js';
@@ -79,7 +80,8 @@ no per-character mode, no ACK handshake, no automatic retry. A typed line is sen
 soon as Enter is pressed (Shift+Enter inserts a line break instead in the TUI),
 repeated back-to-back as many times as the dashboard's FEC strength control says.
 Type '/qr' at the line prompt (or press ^Q in the TUI) for a scannable QR code linking
-to the project's web station.
+to the project's web station (${QNR_PAGE_URL}); '/qr audio' (or 'a' in the TUI popup)
+sounds the same URL out as an actual modem burst.
 
 Test-signal options for tx (both to file and to the air):
   --snr=<dB>                  add noise at this SNR, 3 kHz reference, measured

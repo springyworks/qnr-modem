@@ -17,7 +17,8 @@ There are no modem options. Every parameter is frozen at the value that won its
 measurement sweep, so any two copies of this program can always talk to each other.
 
 It also runs **entirely in a browser** as a single self-contained HTML file — see
-[The web station](#the-web-station-github-pages).
+[The web station](#the-web-station-github-pages). It's published and usable right
+now at **https://springyworks.github.io/qnr-modem/** — no install, nothing to build.
 
 > **Known gap: the burst is 9.9 s, not the intended 5 s.**
 > `npm run requirements` checks every stated on-air constraint against what the code
@@ -574,11 +575,14 @@ Publish it by pointing GitHub Pages at the `docs/` folder on the default branch
 (Settings → Pages → Source: *Deploy from a branch*, folder `/docs`). Opening the
 file directly with `file://` works too.
 
+**Live URL: https://springyworks.github.io/qnr-modem/**
+
 It gives you a terminal with `help`, `info`, `grid`, `offgrid`, `selftest`, `sim`,
-`devices`, `mic`, `monitor`, `deep`, `fold`, `tx`, `fec`, `tone` and `clear`.
+`devices`, `mic`, `monitor`, `deep`, `fold`, `tx`, `fec`, `tone`, `qr` and `clear`.
 `selftest` and `sim` prove the DSP end-to-end in the browser — `sim -18 poor`
 decodes a signal 18 dB under the noise through simulated CCIR Poor fading, matching
-the command-line result.
+the command-line result. `qr` prints a real, scannable QR code for this page's own
+URL; `qr audio` sounds the same URL out as an actual modem burst instead.
 
 ### The world clock decides whose turn it is
 

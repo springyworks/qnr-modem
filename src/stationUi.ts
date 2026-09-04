@@ -33,6 +33,7 @@ export interface StationDashboardHandlers {
   onOffGrid(enabled: boolean): void;
   onTxSnrCycle(direction: 1 | -1): void;
   onTxProfileCycle(direction: 1 | -1): void;
+  onQrAudio(): void;
 }
 
 const escapeTags = (text: string): string => text.replaceAll('{', '\\{').replaceAll('}', '\\}');
@@ -348,14 +349,14 @@ export class StationDashboard {
   }
 
   /** Modal box with a real scannable QR code (Unicode half-blocks) for QNR_PAGE_URL; any key or
-   * click dismisses it. */
+   * click dismisses it, 'a' sounds the URL out as a modem burst. */
   private showQrPopup(): void {
     const art = qrHalfBlockArt(QNR_PAGE_URL);
     const width = Math.max(art[0]?.length ?? 0, QNR_PAGE_URL.length) + 4;
-    const height = art.length + 4;
+    const height = art.length + 5;
     const popup = blessed.box({
       parent: this.screen,
-      label: ' QNR-144 web station (scan or visit) ',
+      label: ' QNR-144 web station (scan, visit, or press a to hear it) ',
       top: 'center',
       left: 'center',
       width,
@@ -365,7 +366,7 @@ export class StationDashboard {
       mouse: true,
       clickable: true,
       style: { border: { fg: 'cyan' }, bg: 'white', fg: 'black' },
-      content: `${art.join('\n')}\n\n${QNR_PAGE_URL}`,
+      content: `${art.join('\n')}\n\n${QNR_PAGE_URL}\n(press a to hear it)`,
     });
     const close = (): void => {
       popup.destroy();
@@ -373,6 +374,7 @@ export class StationDashboard {
     };
     popup.on('click', close);
     popup.key(['escape', 'enter', 'space', 'q'], close);
+    popup.key(['a'], () => this.handlers.onQrAudio());
     popup.focus();
     this.render();
   }

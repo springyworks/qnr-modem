@@ -198,6 +198,7 @@ kbd {
     <button data-cmd="selftest">selftest</button>
     <button data-cmd="grid">grid</button>
     <button data-cmd="qr">qr</button>
+    <button data-cmd="qr audio">qr audio</button>
     <button data-cmd="sim -18 poor">sim -18 poor</button>
     <span class="hint">click the terminal and type &mdash; <kbd>Tab</kbd> completes, <kbd>&uarr;</kbd> recalls</span>
   </footer>
@@ -3607,6 +3608,7 @@ __def("webmodem", function (exports, require, module) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.grid = exports.clean = exports.pageUrl = exports.info = void 0;
 exports.qrLines = qrLines;
+exports.qrAudio = qrAudio;
 exports.burst = burst;
 exports.schedule = schedule;
 exports.simulate = simulate;
@@ -3646,6 +3648,14 @@ exports.pageUrl = qr_js_1.QNR_PAGE_URL;
 /** A real, scannable QR code for `text` (default: this page's own URL), as terminal block-art lines. */
 function qrLines(text = qr_js_1.QNR_PAGE_URL) {
     return (0, qr_js_1.qrHalfBlockArt)(text);
+}
+/**
+ * Sounds `text` (default: this page's own URL) out as a real modem burst -- arbitrary-length
+ * conv+Viterbi frame, not the fixed 16-byte chat protocol, so the full URL survives intact.
+ * Best-effort: this frame shape isn't wired into `liveReceiver`/`decode` above.
+ */
+function qrAudio(text = qr_js_1.QNR_PAGE_URL) {
+    return (0, tx_js_1.modulate)(text, protocol_js_1.BAUD, protocol_js_1.AMPLITUDE, config_js_1.SAMPLE_RATE, 'conv', protocol_js_1.FRAME_OPTIONS);
 }
 const clean = (text) => (0, packet_js_1.decodeChatMessage)((0, packet_js_1.encodeChatMessage)(text)) ?? '';
 exports.clean = clean;
@@ -4192,10 +4202,22 @@ function liveReceiver(onText) {
 
   def('clear', 'clear the screen', function () { outEl.textContent = ''; });
 
-  def('qr', 'show a scannable QR code for this page\'s URL', function () {
+  def('qr', 'qr [audio] - show a scannable QR code for this page\'s URL, or hear it as a modem burst', async function (arg) {
+    if (arg && arg.trim() === 'audio') {
+      setBusy(true, 'qr');
+      await setSink();
+      write('QR AUDIO "' + M.pageUrl + '"', 'c-amber');
+      try {
+        await play(M.qrAudio());
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
     write('');
     M.qrLines().forEach(function (l) { write(l, 'c-cyan'); });
     write('  ' + M.pageUrl, 'c-dim');
+    write('  run "qr audio" to hear it as a modem burst', 'c-dim');
     write('');
   });
 

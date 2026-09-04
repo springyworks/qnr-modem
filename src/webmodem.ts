@@ -22,7 +22,7 @@ import {
   worldPhase,
 } from './protocol.js';
 import { Receiver } from './rx.js';
-import { modulateChatMessage } from './tx.js';
+import { modulate, modulateChatMessage } from './tx.js';
 import { QNR_PAGE_URL, qrHalfBlockArt } from './qr.js';
 
 /**
@@ -54,6 +54,15 @@ export const pageUrl = QNR_PAGE_URL;
 /** A real, scannable QR code for `text` (default: this page's own URL), as terminal block-art lines. */
 export function qrLines(text: string = QNR_PAGE_URL): string[] {
   return qrHalfBlockArt(text);
+}
+
+/**
+ * Sounds `text` (default: this page's own URL) out as a real modem burst -- arbitrary-length
+ * conv+Viterbi frame, not the fixed 16-byte chat protocol, so the full URL survives intact.
+ * Best-effort: this frame shape isn't wired into `liveReceiver`/`decode` above.
+ */
+export function qrAudio(text: string = QNR_PAGE_URL): Float32Array {
+  return modulate(text, BAUD, AMPLITUDE, SAMPLE_RATE, 'conv', FRAME_OPTIONS);
 }
 
 export const clean = (text: string): string => decodeChatMessage(encodeChatMessage(text)) ?? '';

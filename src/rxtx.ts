@@ -8,7 +8,7 @@ import { liveWorkerCount } from './pool.js';
 import { AMPLITUDE, BAUD, DATA_SYMBOLS, FRAME_OPTIONS, GUARD_SAMPLES, LIVE_DECODE_SAMPLES, msUntilPhase, PERIOD_SAMPLES, REPEATS } from './protocol.js';
 import { QNR_PAGE_URL, qrHalfBlockArt } from './qr.js';
 import { StationDashboard, type TxDashboardState } from './stationUi.js';
-import { modulateChatMessage } from './tx.js';
+import { modulate, modulateChatMessage } from './tx.js';
 
 /** One decode attempt per period, which is one attempt per transmitted burst. A worst-case
  * (idle-noise, no early exit) fold measures ~20 s, so a per-slot cadence would overrun. */
@@ -251,6 +251,15 @@ export function runRxTx(opts: RxTxOptions): void {
     void playback?.play(generateTone(TUNE_FREQUENCY_HZ, TUNE_DURATION_SECONDS, AMPLITUDE, SAMPLE_RATE));
   };
 
+  // Sounds the page URL out as a real modem burst (arbitrary-length conv+Viterbi frame, not the
+  // fixed 16-byte chat protocol) so it can be heard, recorded, or even received -- best-effort,
+  // this frame shape isn't wired into the live rx chain here, unlike the chat protocol above.
+  const playQrAudio = (): void => {
+    const burst = modulate(QNR_PAGE_URL, BAUD, AMPLITUDE, SAMPLE_RATE, 'conv', FRAME_OPTIONS);
+    log(`QR AUDIO  "${QNR_PAGE_URL}"  (${(burst.length / SAMPLE_RATE).toFixed(1)}s)`, 'cyan');
+    void playback?.play(burst);
+  };
+
   const handleFrame = (frame: HeardFrame): void => {
     const text = decodeChatMessage(frame.text);
     if (text === undefined) {
@@ -286,6 +295,7 @@ export function runRxTx(opts: RxTxOptions): void {
       onOffGrid: setOffGrid,
       onTxSnrCycle: cycleTxSnr,
       onTxProfileCycle: cycleTxProfile,
+      onQrAudio: playQrAudio,
     });
   } else if (opts.tui) {
     lineReader = readline.createInterface({ input: process.stdin, output: process.stdout, prompt: '> ' });
@@ -312,11 +322,14 @@ export function runRxTx(opts: RxTxOptions): void {
   if (opts.message) queueMessage(opts.message);
 
   if (lineReader) {
-    log(`rxtx  ${identity.label}  ${jobs} decoder threads  -  type a message and press enter, '/qr' for a scannable link, Ctrl-D to quit`);
+    log(`rxtx  ${identity.label}  ${jobs} decoder threads  -  type a message and press enter, '/qr' for a scannable link, '/qr audio' to hear it, Ctrl-D to quit`);
     lineReader.prompt();
     lineReader.on('line', (line) => {
-      if (line.trim() === '/qr') {
+      const trimmed = line.trim();
+      if (trimmed === '/qr') {
         console.log(`${qrHalfBlockArt(QNR_PAGE_URL).join('\n')}\n\n${QNR_PAGE_URL}`);
+      } else if (trimmed === '/qr audio') {
+        playQrAudio();
       } else {
         queueMessage(line);
       }

@@ -462,10 +462,22 @@
 
   def('clear', 'clear the screen', function () { outEl.textContent = ''; });
 
-  def('qr', 'show a scannable QR code for this page\'s URL', function () {
+  def('qr', 'qr [audio] - show a scannable QR code for this page\'s URL, or hear it as a modem burst', async function (arg) {
+    if (arg && arg.trim() === 'audio') {
+      setBusy(true, 'qr');
+      await setSink();
+      write('QR AUDIO "' + M.pageUrl + '"', 'c-amber');
+      try {
+        await play(M.qrAudio());
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
     write('');
     M.qrLines().forEach(function (l) { write(l, 'c-cyan'); });
     write('  ' + M.pageUrl, 'c-dim');
+    write('  run "qr audio" to hear it as a modem burst', 'c-dim');
     write('');
   });
 

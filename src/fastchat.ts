@@ -15,6 +15,7 @@ import {
   RATE,
 } from './protocol.js';
 import { QNR_PAGE_URL, qrHalfBlockArt } from './qr.js';
+import { modulate } from './tx.js';
 
 const CHUNK_OPTS: ChunkOptions = {
   baud: BAUD,
@@ -133,6 +134,14 @@ export function runFastChat(opts: FastChatOptions): void {
     log(`  queued for the fast grid: "${text}"`);
   };
 
+  // Sounds the page URL out as a real modem burst (arbitrary-length conv frame, not the fixed
+  // chunked grid above) -- best-effort, not wired into this ring's decoder.
+  const playQrAudio = (): void => {
+    const burst = modulate(QNR_PAGE_URL, BAUD, AMPLITUDE, SAMPLE_RATE, 'conv', FRAME_OPTIONS);
+    log(`QR AUDIO  "${QNR_PAGE_URL}"  (${(burst.length / SAMPLE_RATE).toFixed(1)}s)`);
+    void playback?.play(burst);
+  };
+
   async function txLoop(): Promise<void> {
     let lastSlotIndex = -1;
     while (!stopped) {
@@ -184,12 +193,15 @@ export function runFastChat(opts: FastChatOptions): void {
 
   lineReader = readline.createInterface({ input: process.stdin, output: process.stdout, prompt: '> ' });
   log(
-    `fastchat  ${identity.label}  ${(CHUNK_SLOT_SAMPLES / SAMPLE_RATE).toFixed(2)}s grid, ${CHUNKS}-way incremental redundancy  -  type a message and press enter, '/qr' for a scannable link, Ctrl-D to quit`
+    `fastchat  ${identity.label}  ${(CHUNK_SLOT_SAMPLES / SAMPLE_RATE).toFixed(2)}s grid, ${CHUNKS}-way incremental redundancy  -  type a message and press enter, '/qr' for a scannable link, '/qr audio' to hear it, Ctrl-D to quit`
   );
   lineReader.prompt();
   lineReader.on('line', (line) => {
-    if (line.trim() === '/qr') {
+    const trimmed = line.trim();
+    if (trimmed === '/qr') {
       console.log(`${qrHalfBlockArt(QNR_PAGE_URL).join('\n')}\n\n${QNR_PAGE_URL}`);
+    } else if (trimmed === '/qr audio') {
+      playQrAudio();
     } else {
       queueMessage(line);
     }
