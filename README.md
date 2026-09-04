@@ -575,9 +575,15 @@ Publish it by pointing GitHub Pages at the `docs/` folder on the default branch
 file directly with `file://` works too.
 
 It gives you a terminal with `help`, `info`, `selftest`, `sim`, `devices`, `mic`,
-`tx`, `tone` and `clear`. `selftest` and `sim` prove the DSP end-to-end in the
-browser — `sim -18 poor` decodes a signal 18 dB under the noise through simulated
-CCIR Poor fading, matching the command-line result.
+`tx`, `fec`, `tone` and `clear`. `selftest` and `sim` prove the DSP end-to-end in
+the browser — `sim -18 poor` decodes a signal 18 dB under the noise through
+simulated CCIR Poor fading, matching the command-line result.
+
+The `tx` command's own repeats alternate `<tx>` (one burst, ~9.9 s) with a single
+`<rx>`-length pause (also ~9.9 s) rather than a full shared-grid period -- there is
+no second station in this bench command needing its own reply slot, so the pause
+only needs to be one turn, not the two-slot wait the real grid protocol reserves
+for a partner's reply.
 
 The folded search runs in a Web Worker built from the same inlined source, so a
 long decode never freezes the page.

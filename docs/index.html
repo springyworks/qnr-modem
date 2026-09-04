@@ -2195,9 +2195,15 @@ function liveReceiver(onText) {
     var one = M.burst(text);
     write('TX "' + text + '"  x' + fec + '  (' + M.info.burstSeconds.toFixed(1) + ' s per burst)', 'c-amber');
     for (var i = 1; i <= fec; i++) {
-      write('  burst ' + i + '/' + fec, 'c-dim');
+      write('  burst ' + i + '/' + fec + '  <tx>', 'c-dim');
       await play(one);
-      if (i < fec) await new Promise(function (r) { setTimeout(r, (M.info.periodSeconds - M.info.burstSeconds) * 1000); });
+      if (i < fec) {
+        // One rx-sized turn between repeats, mirroring the burst itself -- <tx> then <rx>,
+        // not <tx> then a whole extra shared-grid reply slot (that's what made the old
+        // period-length gap sound like two listening turns instead of one).
+        write('  turn ' + i + '/' + fec + '  <rx>  (~' + M.info.burstSeconds.toFixed(0) + ' s)', 'c-dim');
+        await new Promise(function (r) { setTimeout(r, M.info.burstSeconds * 1000); });
+      }
     }
     write('TX done', 'c-green');
     setBusy(false);
