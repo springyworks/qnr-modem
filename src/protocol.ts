@@ -82,6 +82,45 @@ export const LIVE_RING_SAMPLES = (LIVE_FOLD_REPEATS + 1) * PERIOD_SAMPLES;
 /** Live redecode cadence: one attempt per period, which is one attempt per transmitted burst. */
 export const LIVE_DECODE_SAMPLES = PERIOD_SAMPLES;
 
+/**
+ * World-clock frame grid.
+ *
+ * The slot grid is anchored to the Unix epoch in UTC, and that anchor is hard-coded here and
+ * nowhere else. It is never negotiated, announced or detected: two stations line up simply by
+ * both having a correct clock, which any modern computer or radio does. This is what lets a
+ * receiver fold by absolute sample position, and what lets a station know whose turn it is
+ * without anyone transmitting a "now you go" marker -- the schedule itself is the marker.
+ *
+ * Sample zero is 1970-01-01T00:00:00Z. Every station therefore computes the same period
+ * boundaries, forever, with no shared state.
+ */
+const modulo = (value: number, divisor: number): number => ((value % divisor) + divisor) % divisor;
+
+/** Absolute position on the world grid, in samples since the Unix epoch. */
+export const worldSample = (nowMs: number = Date.now()): number => Math.round((nowMs / 1000) * SAMPLE_RATE);
+
+/** Where we are inside the current period, in samples. */
+export const worldPhase = (nowMs: number = Date.now()): number => modulo(worldSample(nowMs), PERIOD_SAMPLES);
+
+/** Burst phase within a period: the transmit slot starts one guard in. */
+export const TX_PHASE_SAMPLES = GUARD_SAMPLES;
+
+/** Whose turn the world clock says it is right now. */
+export const worldLane = (nowMs: number = Date.now()): 'tx' | 'rx' =>
+  Math.floor(worldPhase(nowMs) / SLOT_SAMPLES) === 0 ? 'tx' : 'rx';
+
+/**
+ * Milliseconds until the next occurrence of `phaseSamples` on the world grid. A phase that has
+ * just passed (or is within `guardMs`) rolls into the following period rather than firing late.
+ */
+export function msUntilPhase(phaseSamples: number, nowMs: number = Date.now(), guardMs = 20): number {
+  const now = worldSample(nowMs);
+  const phase = modulo(phaseSamples, PERIOD_SAMPLES);
+  let target = Math.floor(now / PERIOD_SAMPLES) * PERIOD_SAMPLES + phase;
+  if (target <= now + (guardMs / 1000) * SAMPLE_RATE) target += PERIOD_SAMPLES;
+  return ((target - now) / SAMPLE_RATE) * 1000;
+}
+
 export const DECODE_OPTIONS: FoldOptions = {
   baud: BAUD,
   periodSamples: PERIOD_SAMPLES,

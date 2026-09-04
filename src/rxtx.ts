@@ -5,7 +5,7 @@ import { SAMPLE_RATE } from './config.js';
 import { ContinuousReceiver, type HeardFrame } from './live.js';
 import { CHAT_PAYLOAD_BYTES, decodeChatMessage, encodeChatMessage } from './packet.js';
 import { liveWorkerCount } from './pool.js';
-import { AMPLITUDE, BAUD, DATA_SYMBOLS, FRAME_OPTIONS, GUARD_SAMPLES, LIVE_DECODE_SAMPLES, PERIOD_SAMPLES, REPEATS } from './protocol.js';
+import { AMPLITUDE, BAUD, DATA_SYMBOLS, FRAME_OPTIONS, GUARD_SAMPLES, LIVE_DECODE_SAMPLES, msUntilPhase, PERIOD_SAMPLES, REPEATS } from './protocol.js';
 import { StationDashboard, type TxDashboardState } from './stationUi.js';
 import { modulateChatMessage } from './tx.js';
 
@@ -123,11 +123,7 @@ export function runRxTx(opts: RxTxOptions): void {
 
   /** Wait for one exact world-time burst phase; a passed phase rolls into the next period. */
   const waitForPhase = async (phaseSamples: number): Promise<void> => {
-    const nowSamples = Math.round((Date.now() / 1000) * SAMPLE_RATE);
-    const phase = modulo(phaseSamples, PERIOD_SAMPLES);
-    let target = Math.floor(nowSamples / PERIOD_SAMPLES) * PERIOD_SAMPLES + phase;
-    if (target <= nowSamples + Math.round(SAMPLE_RATE / 50)) target += PERIOD_SAMPLES;
-    const waitMs = ((target - nowSamples) / SAMPLE_RATE) * 1000;
+    const waitMs = msUntilPhase(phaseSamples);
     if (waitMs > 1) await delay(waitMs);
   };
 

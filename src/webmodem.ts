@@ -11,11 +11,15 @@ import {
   FRAME_OPTIONS,
   GUARD_SAMPLES,
   LIVE_FOLD_REPEATS,
+  msUntilPhase,
   PAYLOAD_BYTES,
   PERIOD_SAMPLES,
   REPEATS,
   SLOT_SAMPLES,
   summary,
+  TX_PHASE_SAMPLES,
+  worldLane,
+  worldPhase,
 } from './protocol.js';
 import { Receiver } from './rx.js';
 import { modulateChatMessage } from './tx.js';
@@ -44,6 +48,22 @@ export const info = {
 };
 
 export const clean = (text: string): string => decodeChatMessage(encodeChatMessage(text)) ?? '';
+
+/**
+ * The world-clock frame grid, anchored to the Unix epoch in UTC (see protocol.ts). Exposed so
+ * the page can wait for its transmit slot exactly like the terminal station does -- the grid is
+ * hard-coded, so a browser and a command-line station agree with no negotiation at all.
+ */
+export const grid = {
+  /** Milliseconds until the next world-time transmit slot. */
+  msUntilTx: (nowMs?: number): number => msUntilPhase(TX_PHASE_SAMPLES, nowMs),
+  /** Whose turn the world clock says it is: 'tx' or 'rx'. */
+  lane: (nowMs?: number): 'tx' | 'rx' => worldLane(nowMs),
+  /** Seconds elapsed into the current period. */
+  phaseSeconds: (nowMs?: number): number => worldPhase(nowMs) / SAMPLE_RATE,
+  periodSeconds: PERIOD_SAMPLES / SAMPLE_RATE,
+  slotSeconds: SLOT_SAMPLES / SAMPLE_RATE,
+};
 
 /** One burst of the fixed chat protocol, ready to hand to Web Audio. */
 export function burst(text: string): Float32Array {

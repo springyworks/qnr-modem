@@ -14,6 +14,7 @@ import {
   PERIOD_SAMPLES,
   RATE,
   SLOT_SAMPLES,
+  worldSample,
 } from './protocol.js';
 import { Receiver, type RxState } from './rx.js';
 import { DecodeSearch, type SearchProgress, type SearchResult } from './search.js';
@@ -84,7 +85,7 @@ export class ContinuousReceiver {
   private readonly search: DecodeSearch;
   private readonly direct: Receiver;
   private readonly ring = new Float32Array(RING_CAPACITY);
-  private readonly sampleOrigin = Math.round((Date.now() / 1000) * SAMPLE_RATE);
+  private readonly sampleOrigin = worldSample();
   private readonly seen = new Map<string, number>();
   private write = 0;
   private filled = 0;

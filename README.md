@@ -574,11 +574,43 @@ Publish it by pointing GitHub Pages at the `docs/` folder on the default branch
 (Settings → Pages → Source: *Deploy from a branch*, folder `/docs`). Opening the
 file directly with `file://` works too.
 
-It gives you a terminal with `help`, `info`, `selftest`, `sim`, `devices`, `mic`,
-`monitor`, `deep`, `fold`, `tx`, `fec`, `tone` and `clear`. `selftest` and `sim`
-prove the DSP end-to-end in the browser — `sim -18 poor` decodes a signal 18 dB
-under the noise through simulated CCIR Poor fading, matching the command-line
-result.
+It gives you a terminal with `help`, `info`, `grid`, `offgrid`, `selftest`, `sim`,
+`devices`, `mic`, `monitor`, `deep`, `fold`, `tx`, `fec`, `tone` and `clear`.
+`selftest` and `sim` prove the DSP end-to-end in the browser — `sim -18 poor`
+decodes a signal 18 dB under the noise through simulated CCIR Poor fading, matching
+the command-line result.
+
+### The world clock decides whose turn it is
+
+The frame grid is anchored to the **Unix epoch in UTC**, hard-coded in
+[`src/protocol.ts`](src/protocol.ts) (`worldSample`, `worldPhase`, `worldLane`,
+`msUntilPhase`) and defined nowhere else. It is never negotiated, announced or
+detected — two stations line up simply by both having a correct clock, which any
+modern computer or radio has. Nothing is transmitted to synchronise; the schedule
+itself is the marker.
+
+The page and the command-line station therefore agree without ever talking to each
+other. Given the same UTC instant they compute identical values:
+
+```
+                 browser        qnr (CLI)
+  phase          23.70 s        23.70 s
+  this turn      <rx>           <rx>
+  next tx in      6.05 s         6.05 s
+```
+
+`grid` prints the current period, phase, turn and countdown; the header shows it
+live as `grid: <rx> 6s to tx`.
+
+**On-grid (default)** waits for the next world-clock transmit slot, so a distant
+receiver can fold your repeats against the same absolute grid. Repeats land on the
+following period's transmit phase.
+
+**Off-grid** (`offgrid on`, the same idea as the TUI's `^G`) keys up the instant you
+press Enter and spaces repeats one turn apart. It gives up repeat-fold gain, so it
+is for good-SNR local exchanges. Receive is completely unaffected: the world clock
+keeps ticking and all three decoders keep running in parallel, which is why the
+header still shows the grid countdown while an off-grid burst is going out.
 
 ### It listens all the time
 
@@ -604,11 +636,10 @@ you send.
 expensive one); `monitor off` disables self-decoding; `fold` forces a search
 immediately instead of waiting for the next period.
 
-The `tx` command's own repeats alternate `<tx>` (one burst, ~9.9 s) with a single
-`<rx>`-length pause (also ~9.9 s) rather than a full shared-grid period -- there is
-no second station in this bench command needing its own reply slot, so the pause
-only needs to be one turn, not the two-slot wait the real grid protocol reserves
-for a partner's reply.
+The `tx` command's own repeats alternate `<tx>` (one burst, ~9.9 s) with an `<rx>`
+turn. Off-grid that turn is one burst-length (~9.9 s); on-grid it is however long it
+takes to reach the next period's transmit phase (~17.7 s), so every repeat lands on
+the same absolute grid position for the folding receiver.
 
 The folded search runs in a Web Worker built from the same inlined source, so a
 long decode never freezes the page.

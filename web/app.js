@@ -200,6 +200,7 @@
   /* ------------------------------------------------------------------- audio */
 
   var audio = null, micStream = null, micNode = null, analyser = null, receiver = null, sinkId = null;
+  var micSink = null, meterRaf = null, micWatchdog = null, blocksSeen = 0;
 
   /**
    * Continuous receive state. The station listens all the time -- to a remote WebSDR, to the
@@ -283,6 +284,13 @@
       if (!Ctor) throw new Error('this browser has no Web Audio support');
       audio = new Ctor({ sampleRate: RATE });
       rateEl.textContent = 'audio: ' + audio.sampleRate + ' Hz';
+      // One permanent input analyser: the IN meter shows everything entering the receive
+      // chain -- a microphone or WebSDR feed, and our own transmissions when monitoring --
+      // rather than going dead whenever there is no live capture device.
+      analyser = audio.createAnalyser();
+      analyser.fftSize = 2048;
+      analyser.smoothingTimeConstant = 0.3;
+      startMeter();
       if (Math.abs(audio.sampleRate - RATE) > 1) {
         write('warning: browser gave ' + audio.sampleRate + ' Hz, not ' + RATE + ' Hz.', 'c-amber');
         write('  tones are generated at the context rate, so two browsers at different rates', 'c-amber');
@@ -302,6 +310,9 @@
       src.buffer = buf;
       var gain = ac.createGain();
       src.connect(gain).connect(ac.destination);
+      // Our own transmission is audio entering the station too, so it drives the IN meter and
+      // spectrum as well -- this is the "always listen to ourselves" path made visible.
+      if (monitor && analyser) src.connect(analyser);
       var peak = 0;
       for (var i = 0; i < samples.length; i += 64) peak = Math.max(peak, Math.abs(samples[i]));
       showLevel(outBar, outDb, 20 * Math.log10(Math.max(peak, 1e-6)));
@@ -327,15 +338,21 @@
       }
     });
     var source = ac.createMediaStreamSource(micStream);
-    analyser = ac.createAnalyser();
-    analyser.fftSize = 2048;
+
+    // A Web Audio node only runs if it reaches the destination. Without this muted sink the
+    // AudioWorklet's process() is never called, so neither the meter nor the decoder sees
+    // anything. The gain is zero so the microphone is never fed back to the speakers.
+    micSink = ac.createGain();
+    micSink.gain.value = 0;
+    micSink.connect(ac.destination);
     source.connect(analyser);
+    analyser.connect(micSink);
 
     receiver = M.liveReceiver(function (text) { report(text, 'direct'); });
     resetRing();
     startFolding();
+    blocksSeen = 0;
 
-    var size = 4096;
     if (ac.audioWorklet && window.AudioWorkletNode) {
       var code = 'class P extends AudioWorkletProcessor{process(i){if(i[0]&&i[0][0])this.port.postMessage(i[0][0].slice());return true}}registerProcessor("qnr-tap",P)';
       var url = URL.createObjectURL(new Blob([code], { type: 'application/javascript' }));
@@ -344,38 +361,64 @@
       micNode = new AudioWorkletNode(ac, 'qnr-tap');
       micNode.port.onmessage = function (e) { onBlock(e.data); };
       source.connect(micNode);
-      write('mic on (AudioWorklet, ' + ac.sampleRate + ' Hz) - listening for bursts', 'c-green');
+      micNode.connect(micSink);
+      write('mic on (AudioWorklet, ' + ac.sampleRate + ' Hz) - listening continuously', 'c-green');
     } else {
-      micNode = ac.createScriptProcessor(size, 1, 1);
+      micNode = ac.createScriptProcessor(4096, 1, 1);
       micNode.onaudioprocess = function (e) { onBlock(new Float32Array(e.inputBuffer.getChannelData(0))); };
       source.connect(micNode);
-      micNode.connect(ac.destination);
+      micNode.connect(micSink);
       write('mic on (ScriptProcessor fallback, ' + ac.sampleRate + ' Hz)', 'c-amber');
     }
+
+    // If the tap never fires, the meter would sit at -inf forever with no explanation.
+    clearTimeout(micWatchdog);
+    micWatchdog = setTimeout(function () {
+      if (micStream && blocksSeen === 0) {
+        write('warning: audio is open but no samples are arriving.', 'c-red');
+        write('  check the OS mixer: the input may be muted, or a different device is selected.', 'c-amber');
+      }
+    }, 2000);
   }
 
-  var freqScratch = null;
+  /**
+   * Drives the IN meter and spectrum straight from the analyser on an animation frame, so the
+   * display reflects real input even if the decoder tap is starved.
+   */
+  function startMeter() {
+    if (meterRaf) return;
+    var time = new Float32Array(analyser.fftSize);
+    var freq = new Float32Array(analyser.frequencyBinCount);
+    var step = function () {
+      if (!analyser) { meterRaf = null; return; }
+      meterRaf = requestAnimationFrame(step);
+      if (analyser.getFloatTimeDomainData) {
+        analyser.getFloatTimeDomainData(time);
+        showLevel(inBar, inDb, dbOf(time));
+      }
+      analyser.getFloatFrequencyData(freq);
+      drawSpectrum(freq);
+    };
+    step();
+  }
+
   function onBlock(block) {
-    showLevel(inBar, inDb, dbOf(block));
+    blocksSeen++;
     if (receiver) receiver.push(block);
     ringPush(block);
-    if (analyser) {
-      if (!freqScratch) freqScratch = new Float32Array(analyser.frequencyBinCount);
-      analyser.getFloatFrequencyData(freqScratch);
-      drawSpectrum(freqScratch);
-    }
   }
 
   function micOff() {
     if (!micStream) { write('mic is not on', 'c-amber'); return; }
-    if (micNode) { try { micNode.disconnect(); } catch (e) { /* already gone */ } }
+    clearTimeout(micWatchdog);
+    // The analyser is owned by the context and stays connected, so the IN meter keeps
+    // showing our own transmissions after capture stops.
+    [micNode, micSink].forEach(function (n) { if (n) { try { n.disconnect(); } catch (e) { /* already gone */ } } });
     micStream.getTracks().forEach(function (t) { t.stop(); });
-    micStream = null; micNode = null; receiver = null; analyser = null;
+    micStream = null; micNode = null; receiver = null; micSink = null;
     if (foldTimer) { clearInterval(foldTimer); foldTimer = null; }
-    showLevel(inBar, inDb, -60);
-    drawSpectrum(null);
-    setRxState('off');
-    write('mic off - no longer listening', 'c-amber');
+    setRxState('off (self-monitor only)');
+    write('mic off - no longer listening to the outside', 'c-amber');
   }
 
   /**
@@ -469,9 +512,31 @@
   });
 
   def('fold', 'run the folded weak-signal search right now', function () {
-    if (!micStream) throw new Error('not listening - run "mic on" first');
+    if (!ring || ringFilled === 0) throw new Error('no captured audio yet - run "mic on", or "inject" to test without a mic');
     foldNow();
     write('folded search queued over ' + (ringFilled / RATE).toFixed(0) + ' s of captured audio', 'c-dim');
+  });
+
+  def('inject', 'inject [snrDb] - push a burst into the receive chain, no microphone needed', function (arg) {
+    var snr = arg ? parseFloat(arg) : NaN;
+    var msg = 'INJECTED TEST';
+    var signal = M.schedule(msg, 2);
+    if (isFinite(snr)) signal = M.simulate(signal, M.burst(msg), { snrDb: snr, profile: null, seed: 1 });
+    write('injecting "' + msg + '"' + (isFinite(snr) ? ' at ' + snr + ' dB SNR' : ' clean') +
+      ' into the receive chain (' + (signal.length / RATE).toFixed(0) + ' s)', 'c-dim');
+
+    // Exercises exactly the path live audio takes -- meter, direct decoder and fold ring --
+    // so the receive chain can be verified where no capture device exists at all.
+    if (!ring) resetRing();
+    if (!receiver) receiver = M.liveReceiver(function (text) { report(text, 'direct'); });
+    var step = 4096;
+    for (var i = 0; i < signal.length; i += step) {
+      var block = signal.subarray(i, Math.min(i + step, signal.length));
+      showLevel(inBar, inDb, dbOf(block));
+      onBlock(block);
+    }
+    write('injected ' + blocksSeen + ' blocks; IN peaked at ' + dbOf(signal).toFixed(1) + ' dB', 'c-dim');
+    write('now run "fold" to search the ring for it.', 'c-cyan');
   });
 
   var fec = 2;
@@ -485,14 +550,55 @@
       ' s of tx/rx turns)', 'c-cyan');
   });
 
-  def('tx', 'tx <message> - transmit through the speakers', async function (arg) {
+  var offGrid = false;
+  def('offgrid', 'offgrid on | off - transmit immediately instead of on the world clock', function (arg) {
+    if (arg === 'on') offGrid = true;
+    else if (arg === 'off') offGrid = false;
+    if (offGrid) {
+      write('off-grid ON - transmit starts the moment you press Enter', 'c-amber');
+      write('  no shared-grid alignment, so a far station gets no repeat-fold gain;', 'c-dim');
+      write('  intended for good-SNR local exchanges. Receive is unaffected.', 'c-dim');
+    } else {
+      write('off-grid OFF - transmit waits for the next world-clock tx slot', 'c-cyan');
+      write('  next slot in ' + (M.grid.msUntilTx() / 1000).toFixed(1) + ' s', 'c-dim');
+    }
+  });
+
+  def('grid', 'show the hard-coded world-clock frame grid', function () {
+    write('');
+    write('  world grid is anchored to the Unix epoch (UTC) and never negotiated:', 'c-cyan');
+    write('  two stations line up by both having a correct clock, nothing is sent to sync.', 'c-dim');
+    write('');
+    write('  period      ' + M.grid.periodSeconds.toFixed(2) + ' s   =  <tx> ' +
+      M.grid.slotSeconds.toFixed(2) + ' s  +  <rx> ' + M.grid.slotSeconds.toFixed(2) + ' s');
+    write('  UTC now     ' + new Date().toISOString());
+    write('  phase       ' + M.grid.phaseSeconds().toFixed(2) + ' s into the period');
+    write('  this turn   <' + M.grid.lane() + '>');
+    write('  next tx in  ' + (M.grid.msUntilTx() / 1000).toFixed(2) + ' s');
+    write('  mode        ' + (offGrid ? 'OFF-GRID (immediate)' : 'ON-GRID (world clock)'), offGrid ? 'c-amber' : 'c-green');
+    write('');
+  });
+
+  def('tx', 'tx <message> - transmit (on the world clock unless "offgrid on")', async function (arg) {
     if (!arg) throw new Error('usage: tx CQ CQ DE QNR');
     var text = M.clean(arg);
     if (!text) throw new Error('need at least one printable ASCII character');
     setBusy(true, 'tx');
     await setSink();
     var one = M.burst(text);
-    write('TX "' + text + '"  x' + fec + '  (' + M.info.burstSeconds.toFixed(1) + ' s per burst)', 'c-amber');
+    write('TX "' + text + '"  x' + fec + '  (' + M.info.burstSeconds.toFixed(1) + ' s per burst)  ' +
+      (offGrid ? '[off-grid]' : '[world clock]'), 'c-amber');
+
+    // On-grid: line up with the world-clock tx slot so a distant receiver can fold our repeats
+    // against the same absolute grid. Decoding continues throughout either way.
+    if (!offGrid) {
+      var waitMs = M.grid.msUntilTx();
+      write('  waiting ' + (waitMs / 1000).toFixed(1) + ' s for the world-clock tx slot', 'c-dim');
+      var tick = ticker('  <rx> until our slot');
+      await new Promise(function (r) { setTimeout(r, waitMs); });
+      tick.stop();
+    }
+
     for (var i = 1; i <= fec; i++) {
       write('  burst ' + i + '/' + fec + '  <tx>', 'c-dim');
       // Always listen to ourselves: the burst goes through a decoder directly, so a
@@ -500,19 +606,18 @@
       if (monitor) selfMonitor(one);
       await play(one);
       if (i < fec) {
-        // One rx-sized turn between repeats, mirroring the burst itself -- <tx> then <rx>,
-        // not <tx> then a whole extra shared-grid reply slot (that's what made the old
-        // period-length gap sound like two listening turns instead of one).
-        write('  turn ' + i + '/' + fec + '  <rx>  (~' + M.info.burstSeconds.toFixed(0) + ' s)', 'c-dim');
-        await new Promise(function (r) { setTimeout(r, M.info.burstSeconds * 1000); });
+        // On-grid repeats must land on the next period's tx phase, so the receiver folds them
+        // on top of each other. Off-grid just takes one rx-length turn and goes again.
+        var gapMs = offGrid ? M.info.burstSeconds * 1000 : M.grid.msUntilTx();
+        write('  turn ' + i + '/' + fec + '  <rx>  (' + (gapMs / 1000).toFixed(1) + ' s)', 'c-dim');
+        await new Promise(function (r) { setTimeout(r, gapMs); });
       }
     }
     write('TX done', 'c-green');
     setBusy(false);
   });
 
-  def('tone', 'play a 1 kHz test tone to check audio routing', async function () {
-    var ac = context();
+  def('tone', 'play a 1 kHz test tone to check audio routing', async function () {    var ac = context();
     var n = Math.round(ac.sampleRate * 0.5), s = new Float32Array(n);
     for (var i = 0; i < n; i++) s[i] = 0.4 * Math.sin((2 * Math.PI * 1000 * i) / ac.sampleRate);
     await setSink();
@@ -585,6 +690,16 @@
   setRxState('waiting for a click');
   redraw();
   termEl.focus();
+
+  // The world grid runs off the wall clock, so it ticks whether or not we are transmitting.
+  var gridEl = document.getElementById('gridstate');
+  setInterval(function () {
+    if (!gridEl) return;
+    var lane = M.grid.lane();
+    gridEl.textContent = 'grid: <' + lane + '> ' + (M.grid.msUntilTx() / 1000).toFixed(0) + 's to tx' +
+      (offGrid ? ' (off)' : '');
+    gridEl.style.color = offGrid ? 'var(--amber)' : (lane === 'tx' ? 'var(--green)' : 'var(--dim)');
+  }, 250);
 
   // Browsers only allow audio capture after a gesture, so continuous receive begins at the
   // first click or keypress rather than on load.
