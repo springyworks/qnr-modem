@@ -575,9 +575,34 @@ Publish it by pointing GitHub Pages at the `docs/` folder on the default branch
 file directly with `file://` works too.
 
 It gives you a terminal with `help`, `info`, `selftest`, `sim`, `devices`, `mic`,
-`tx`, `fec`, `tone` and `clear`. `selftest` and `sim` prove the DSP end-to-end in
-the browser — `sim -18 poor` decodes a signal 18 dB under the noise through
-simulated CCIR Poor fading, matching the command-line result.
+`monitor`, `deep`, `fold`, `tx`, `fec`, `tone` and `clear`. `selftest` and `sim`
+prove the DSP end-to-end in the browser — `sim -18 poor` decodes a signal 18 dB
+under the noise through simulated CCIR Poor fading, matching the command-line
+result.
+
+### It listens all the time
+
+Receive is continuous, not something you start per message. From your first click
+on the page, three decoders run:
+
+| | What it catches | When |
+|---|---|---|
+| **direct** | one burst, any timing, loud or off-grid | every captured block |
+| **folded** | weak signals, by summing LLRs over repeats | every period, over the last `deep` periods of audio |
+| **self** | our own transmissions | every burst we send |
+
+Self-monitoring is deliberate, not speaker-to-microphone bleed: each outgoing burst
+is pushed through its own decoder instance, so a transmission is confirmed even
+with no acoustic path back and no microphone permission at all. Decoded frames are
+tagged `direct`, `folded` or `self` and de-duplicated across all three.
+
+This is what makes the page useful pointed at a **remote WebSDR** feed: leave it
+running, and it keeps folding whatever it hears while still confirming everything
+you send.
+
+`deep <periods>` trades weak-signal depth against CPU (the folded search is the
+expensive one); `monitor off` disables self-decoding; `fold` forces a search
+immediately instead of waiting for the next period.
 
 The `tx` command's own repeats alternate `<tx>` (one burst, ~9.9 s) with a single
 `<rx>`-length pause (also ~9.9 s) rather than a full shared-grid period -- there is

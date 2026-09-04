@@ -48,14 +48,14 @@
     return worker;
   }
 
-  function job(request) {
+  function job(request, transfer) {
     return new Promise(function (resolve, reject) {
       var w;
       try { w = ensureWorker(); } catch (e) { reject(new Error('Web Workers unavailable: ' + e.message)); return; }
       var id = ++jobId;
       jobs[id] = function (msg) { msg.ok ? resolve(msg) : reject(new Error(msg.error)); };
       request.id = id;
-      w.postMessage(request);
+      w.postMessage(request, transfer || []);
     });
   }
 
@@ -201,6 +201,82 @@
 
   var audio = null, micStream = null, micNode = null, analyser = null, receiver = null, sinkId = null;
 
+  /**
+   * Continuous receive state. The station listens all the time -- to a remote WebSDR, to the
+   * air, and to its own transmissions -- so there are two decoders running side by side, the
+   * same split the command-line station uses:
+   *   direct : streaming, single burst, cheap, catches loud/off-grid signals immediately
+   *   folded : periodic weak-signal search over a ring of past audio, run in the Worker
+   */
+  var foldDepth = 2;
+  var ring = null, ringWrite = 0, ringFilled = 0, ringOrigin = 0;
+  var foldTimer = null, folding = false, monitor = true, autoStarted = false;
+  var seen = Object.create(null);
+
+  function ringCapacity() { return Math.round(M.info.periodSeconds * (foldDepth + 1) * RATE); }
+
+  function resetRing() {
+    ring = new Float32Array(ringCapacity());
+    ringWrite = 0; ringFilled = 0; ringOrigin = 0;
+  }
+
+  function ringPush(block) {
+    if (!ring) resetRing();
+    for (var i = 0; i < block.length; i++) {
+      ring[ringWrite] = block[i];
+      ringWrite = (ringWrite + 1) % ring.length;
+    }
+    ringFilled = Math.min(ring.length, ringFilled + block.length);
+  }
+
+  function ringOrdered() {
+    var out = new Float32Array(ringFilled);
+    var start = (ringWrite - ringFilled + ring.length) % ring.length;
+    for (var i = 0; i < ringFilled; i++) out[i] = ring[(start + i) % ring.length];
+    return out;
+  }
+
+  /** Suppresses the same message arriving twice (mic bleed plus self-monitor, or repeats). */
+  function report(text, how) {
+    var now = Date.now();
+    if (seen[text] && now - seen[text] < M.info.periodSeconds * 2000) return;
+    seen[text] = now;
+    write('  >> "' + text + '"   [CRC OK]  ' + how + '  ' + new Date().toLocaleTimeString(), 'c-rx');
+  }
+
+  function setRxState(label) {
+    var el = document.getElementById('rxstate');
+    if (el) el.textContent = 'rx: ' + label;
+  }
+
+  function foldNow() {
+    if (folding || !ring || ringFilled < M.info.burstSeconds * RATE) return;
+    folding = true;
+    setRxState('folding ' + (ringFilled / RATE).toFixed(0) + ' s');
+    var samples = ringOrdered();
+    job({ cmd: 'decode', samples: samples.buffer }, [samples.buffer])
+      .then(function (r) {
+        r.hits.forEach(function (h) { report(h.text, h.bursts + 'x LLR folded'); });
+        setRxState('listening');
+      }, function () { setRxState('listening'); })
+      .then(function () { folding = false; });
+  }
+
+  function startFolding() {
+    if (foldTimer) return;
+    foldTimer = setInterval(foldNow, M.info.periodSeconds * 1000);
+  }
+
+  /** Runs an outgoing burst through its own decoder instance, so self-monitoring never
+   * disturbs the streaming state machine that is tracking the microphone. */
+  function selfMonitor(samples) {
+    var rx = M.liveReceiver(function (text) { report(text, 'self'); });
+    var step = 4096;
+    for (var i = 0; i < samples.length; i += step) {
+      rx.push(samples.subarray(i, Math.min(i + step, samples.length)));
+    }
+  }
+
   function context() {
     if (!audio) {
       var Ctor = window.AudioContext || window.webkitAudioContext;
@@ -255,9 +331,9 @@
     analyser.fftSize = 2048;
     source.connect(analyser);
 
-    receiver = M.liveReceiver(function (text) {
-      write('  >> "' + text + '"   [CRC OK]  ' + new Date().toLocaleTimeString(), 'c-rx');
-    });
+    receiver = M.liveReceiver(function (text) { report(text, 'direct'); });
+    resetRing();
+    startFolding();
 
     var size = 4096;
     if (ac.audioWorklet && window.AudioWorkletNode) {
@@ -282,6 +358,7 @@
   function onBlock(block) {
     showLevel(inBar, inDb, dbOf(block));
     if (receiver) receiver.push(block);
+    ringPush(block);
     if (analyser) {
       if (!freqScratch) freqScratch = new Float32Array(analyser.frequencyBinCount);
       analyser.getFloatFrequencyData(freqScratch);
@@ -294,9 +371,26 @@
     if (micNode) { try { micNode.disconnect(); } catch (e) { /* already gone */ } }
     micStream.getTracks().forEach(function (t) { t.stop(); });
     micStream = null; micNode = null; receiver = null; analyser = null;
+    if (foldTimer) { clearInterval(foldTimer); foldTimer = null; }
     showLevel(inBar, inDb, -60);
     drawSpectrum(null);
-    write('mic off', 'c-amber');
+    setRxState('off');
+    write('mic off - no longer listening', 'c-amber');
+  }
+
+  /**
+   * Browsers refuse microphone access without a user gesture, so "always listening" means
+   * "from the first interaction onwards". Failure here is not fatal: the page still simulates,
+   * decodes files and transmits.
+   */
+  function autoStart() {
+    if (autoStarted) return;
+    autoStarted = true;
+    micOn().then(function () { setRxState('listening'); }, function (e) {
+      write('continuous receive not started: ' + e.message, 'c-amber');
+      write('run "mic on" to retry once you have granted microphone access.', 'c-dim');
+      setRxState('off');
+    });
   }
 
   /* ---------------------------------------------------------------- commands */
@@ -353,9 +447,31 @@
     write(ok ? 'output -> ' + (hit.label || hit.deviceId) : 'this browser cannot switch output from script', ok ? 'c-green' : 'c-amber');
   });
 
-  def('mic', 'mic on | mic off - live receive from the microphone', function (arg) {
+  def('mic', 'mic on | mic off - live receive from the microphone or WebSDR feed', function (arg) {
     if (arg === 'off') return micOff();
-    return micOn();
+    return micOn().then(function () { setRxState('listening'); });
+  });
+
+  def('monitor', 'monitor on | off - decode our own transmissions (default on)', function (arg) {
+    if (arg === 'on') monitor = true;
+    else if (arg === 'off') monitor = false;
+    write('self-monitor ' + (monitor ? 'ON - every burst we send is also decoded' : 'OFF'), 'c-cyan');
+  });
+
+  def('deep', 'deep <periods> - how much past audio the folded search uses', function (arg) {
+    if (arg) {
+      foldDepth = Math.max(1, Math.min(8, parseInt(arg, 10) || 1));
+      resetRing();
+    }
+    write('folded search uses ' + foldDepth + ' periods (' +
+      (M.info.periodSeconds * (foldDepth + 1)).toFixed(0) + ' s of audio, retried every ' +
+      M.info.periodSeconds.toFixed(0) + ' s)', 'c-cyan');
+  });
+
+  def('fold', 'run the folded weak-signal search right now', function () {
+    if (!micStream) throw new Error('not listening - run "mic on" first');
+    foldNow();
+    write('folded search queued over ' + (ringFilled / RATE).toFixed(0) + ' s of captured audio', 'c-dim');
   });
 
   var fec = 2;
@@ -364,7 +480,9 @@
       var n = Math.max(1, Math.min(M.info.repeats, parseInt(arg, 10) || 1));
       fec = n;
     }
-    write('FEC strength x' + fec + '  (' + (fec * M.info.periodSeconds).toFixed(0) + ' s on air)', 'c-cyan');
+    // tx alternates <tx> and <rx> turns of one burst each, so air time is 2n-1 bursts.
+    write('FEC strength x' + fec + '  (' + ((2 * fec - 1) * M.info.burstSeconds).toFixed(0) +
+      ' s of tx/rx turns)', 'c-cyan');
   });
 
   def('tx', 'tx <message> - transmit through the speakers', async function (arg) {
@@ -377,6 +495,9 @@
     write('TX "' + text + '"  x' + fec + '  (' + M.info.burstSeconds.toFixed(1) + ' s per burst)', 'c-amber');
     for (var i = 1; i <= fec; i++) {
       write('  burst ' + i + '/' + fec + '  <tx>', 'c-dim');
+      // Always listen to ourselves: the burst goes through a decoder directly, so a
+      // transmission is confirmed even with no acoustic path back and no mic permission.
+      if (monitor) selfMonitor(one);
       await play(one);
       if (i < fec) {
         // One rx-sized turn between repeats, mirroring the burst itself -- <tx> then <rx>,
@@ -449,12 +570,25 @@
   write(M.info.tones + ' tones, ' + M.info.lowHz.toFixed(0) + '-' + M.info.highHz.toFixed(0) + ' Hz, ' +
     M.info.baud + ' Bd, K=7 rate-1/3 + Viterbi, CRC-16', 'c-dim');
   write('');
-  write('Type "help" for commands, or "selftest" to prove the DSP works right now.', 'c-cyan');
-  write('For live receive use "mic on"; to transmit, "tx CQ CQ DE QNR".');
+  write('The station listens continuously once you interact with the page:', 'c-cyan');
+  write('  direct   every burst, immediately, at any timing (loud / off-grid)', 'c-dim');
+  write('  folded   weak-signal search over the last ' + (M.info.periodSeconds * (foldDepth + 1)).toFixed(0) +
+    ' s, retried every ' + M.info.periodSeconds.toFixed(0) + ' s', 'c-dim');
+  write('  self     our own transmissions are decoded too, always', 'c-dim');
+  write('');
+  write('Type "help" for commands, or "selftest" to prove the DSP works right now.');
+  write('Point this at a WebSDR feed and leave it running; "tx CQ CQ DE QNR" to send.');
   write('');
   showLevel(inBar, inDb, -60);
   showLevel(outBar, outDb, -60);
   drawSpectrum(null);
+  setRxState('waiting for a click');
   redraw();
   termEl.focus();
+
+  // Browsers only allow audio capture after a gesture, so continuous receive begins at the
+  // first click or keypress rather than on load.
+  ['click', 'keydown'].forEach(function (type) {
+    document.addEventListener(type, autoStart, { once: true });
+  });
 })();
