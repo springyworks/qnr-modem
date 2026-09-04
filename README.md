@@ -1,8 +1,10 @@
 # QNR-144
 
 A weak-signal HF chat modem: 144-tone MFSK, convolutional coding with
-soft-decision Viterbi, exact-repeat correlation, and a fixed three-basic-frame
-send/listen/listen schedule.
+soft-decision Viterbi, exact-repeat correlation, and a fixed two-basic-frame
+tx/rx schedule that repeats as long as useful -- fast nearby chat at a handful
+of repeats, or WSPR-grade weak-signal margin from the same protocol by just
+repeating longer (up to `REPEATS`, currently 60).
 
 Decodes at **-20 dB SNR** (3 kHz reference) through a CCIR *bad* Watterson channel
 (2 ms delay spread, 1 Hz Doppler). Occupies **2.51 kHz**, so it fits an SSB channel.
@@ -50,10 +52,13 @@ qnr tx "HELLO" -o out.wav      # write a chat transmission to a WAV file
 qnr rx                         # listen on the default audio input
 qnr rx -i in.wav               # decode a WAV file
 qnr rx -i in.wav --jobs=4      # cap the decoder to 4 threads
-qnr rxtx                       # listen continuously, ready to send chat messages
-qnr rxtx "HELLO"               # queue one message and listen at the same time
-qnr rxtx -tui                  # full-screen chat station dashboard
+qnr                            # listen continuously, ready to send chat messages
+qnr "HELLO"                    # queue one message and listen at the same time
+qnr -tui                       # full-screen chat station dashboard
 ```
+
+There is no `rxtx` subcommand: simultaneous transmit + continuous receive is what
+plain `qnr` *is*, so it needs no argument to select it.
 
 The receiver uses every core but one, so the machine stays usable while it works.
 `--jobs=N` overrides that. Input WAVs are accepted at any sample rate and in 8/16/24/32-bit
@@ -80,8 +85,8 @@ NAME
 SYNOPSIS
        qnr tx MESSAGE [-o FILE] [--snr=DB --profile=NAME [--seed=N]] [--jobs=N]
        qnr rx [-i FILE] [--jobs=N]
-       qnr rxtx [MESSAGE] [-tui] [--jobs=N]
-       qnr
+       qnr fastchat [MESSAGE]
+       qnr [MESSAGE] [-tui] [--jobs=N]
 
 DESCRIPTION
        qnr transmits and receives a fixed-format 144-tone MFSK frame over a
@@ -92,25 +97,38 @@ DESCRIPTION
        message text, an output/input file, and how many worker threads
        decode.
 
-       Called with no arguments, qnr prints this summary and exits 1.
+       Called with no MESSAGE and no recognised subcommand, qnr is the default
+       station: transmit and receive at the same time, forever, until
+       interrupted with Ctrl-C. There used to be a separate `rxtx` subcommand
+       for this; it has been folded into plain `qnr` so there is only one app
+       to remember. `qnr rxtx` now prints a one-line pointer to this instead
+       of running.
 
 COMMANDS
-       tx MESSAGE
-              Transmit one printable ASCII chat message through the default
-              audio output. Messages are limited to 16 payload characters and
-              are zero-padded before framing. The frame has CRC-16,
-              convolutional coding (K=7, rate 1/3), and interleaving.
+       (no subcommand) [MESSAGE] [-tui]
+              The default station: transmit and receive at the same time.
+              With no MESSAGE this behaves like rx. With MESSAGE supplied, it
+              queues one chat message, transmits it, and continues listening.
+              There is no ACK handshake or automatic retry. The TUI
+              (`-tui`/`--tui`) provides FEC-strength and off-grid controls.
+              Runs until interrupted with Ctrl-C.
 
-       rx     Listen on the default audio input and decode continuously.
-              It prints each CRC-valid chat message and its measured tuning
+       tx MESSAGE
+              One-shot transmit only, no listening: play (or render to a
+              WAV file) one message through the default audio output.
+              Messages are limited to 16 payload characters and are
+              zero-padded before framing. The frame has CRC-16, convolutional
+              coding (K=7, rate 1/3), and interleaving.
+
+       rx     Listen only, no ability to send. Decodes continuously and
+              prints each CRC-valid chat message and its measured tuning
               offset and clock drift.
 
-       rxtx [MESSAGE]
-              Transmit and receive at the same time. With no MESSAGE this
-              behaves like rx. With MESSAGE supplied, it queues one chat
-              message, transmits it, and continues listening. There is no ACK
-              handshake or automatic retry. The TUI provides FEC-strength and
-              off-grid controls. Runs until interrupted with Ctrl-C.
+       fastchat [MESSAGE]
+              3-second-grid incremental-redundancy chat: the same coded
+              payload striped into short repeating bursts instead of one long
+              burst, for late-join capability (see the fastchat section
+              below). No ACK, no TUI.
 
 OPTIONS
        -o, --out FILE
@@ -140,15 +158,15 @@ OPTIONS
               --snr/--profile test signal is exactly reproducible. Default 1.
 
        --jobs=N
-              (tx, rx and rxtx) Worker thread count for the decoder search.
-              Default is cores - 1, so the machine stays usable while it
-              decodes.
+              (tx, rx and the default station) Worker thread count for the
+              decoder search. Default is cores - 1, so the machine stays
+              usable while it decodes.
 
        -tui, --tui
-              (rxtx only) Full-screen Blessed station console with separate
-              RX and TX panes, VU meters, raw-repeat/FEC evidence, an event
-              trace, and a message entry line. A non-TTY falls back to the
-              plain line prompt.
+              (default station only) Full-screen Blessed station console with
+              separate RX and TX panes, VU meters, raw-repeat/FEC evidence, an
+              event trace, and a message entry line. A non-TTY falls back to
+              the plain line prompt.
 
 EXIT STATUS
        0      tx completed, or rx decoded a frame that passed its CRC-16.
@@ -156,7 +174,7 @@ EXIT STATUS
               reached the end of the input without a passing frame.
 
 EXAMPLES
-       qnr rxtx "CQ QNR" -tui
+       qnr "CQ QNR" -tui
               Start a live station dashboard and queue one chat message.
 
        qnr tx "CQ QNR" -o out.wav
@@ -172,33 +190,27 @@ EXAMPLES
               Listen on the default audio input and print any frame that
               passes its CRC-16, with its tuning offset and clock drift.
 
-       qnr rxtx "CQ"
+       qnr "CQ"
               Queue one short chat message. The receiver displays it after a
               CRC-valid decode; there is no ACK or per-character mode.
 
-       qnr rxtx -tui
-              Listen continuously with the RX/TX station dashboard. An
-              always-visible CONTROLS pane above the message box exposes
-              FEC strength, off-grid mode, and the tune tone; there is no
-              F1/Tab popup menu, since function keys send a different,
-              terminal-dependent escape sequence on every emulator.
+       qnr -tui
+              Listen continuously with the RX/TX station dashboard. Press F1
+              or Tab, or click [F1 Menu], to open the operator menu.
 
        TUI quick chat
               Type up to 16 printable ASCII characters and press Enter to
               transmit. Shift+Enter inserts a newline when supported by the
-              terminal. Controls use Ctrl-chords, the same nano-style choice
-              nano itself relies on: a Ctrl combination is one control byte,
-              never an ambiguous multi-byte escape sequence, and it never
-              collides with typed chat text. ^F cycles FEC strength, ^G
-              toggles off-grid mode, ^T plays a 0.5 second 1 kHz test tone.
-              ^L moves keyboard focus onto the CONTROLS pane for arrow-key
-              or mouse-click navigation; Escape returns focus to the message
-              box. ^X or ^C quits.
+              terminal. Open the menu with F1, Tab, or the mouse. Use [o] to
+              enable Off-grid mode for immediate transmit, [f] to choose FEC
+              strength, and [t] to play a 0.5 second 1 kHz audio test tone.
+              Use arrow keys and Enter, mouse clicks, or the bracketed mnemonic
+              letters to navigate. Press x or Escape to go back.
 
        Fast good-SNR chat
-              Start `qnr rxtx -tui` at both stations, press ^G to switch on
-              off-grid mode, and type a message. It transmits as soon as
-              Enter is pressed. The receiver's direct decoder accepts the
+              Start `qnr -tui` at both stations, open the menu, choose
+              `o Off-grid mode: ON`, and type a message. It transmits as soon
+              as Enter is pressed. The receiver's direct decoder accepts the
               burst without shared-grid alignment. Use this mode for short
               local or good-SNR exchanges; grid mode is better for weak-signal
               repeat folding.
@@ -236,7 +248,7 @@ window is reset so the next message cannot contaminate the previous one.
 
 For WAV input, sample zero is the timing epoch. `qnr tx -o` writes its first burst
 after the initial protocol guard, so the generated file's first lane is TX; blind
-preamble acquisition still accepts shifted recordings.
+sync-marker acquisition still accepts shifted recordings.
 
 ---
 
@@ -263,8 +275,10 @@ preamble acquisition still accepts shifted recordings.
  [ pack 7 bits per symbol ]   -> tones 0..127
       |
       v
- [ prepend preamble ]         alternating sync tones x2
-      |
+ [ scatter sync markers ]     alternating sync tones spliced between data chunks
+      |                       instead of clustered up front (src/synclayout.ts) --
+      |                       keeps the burst's texture even; total symbol count
+      |                       (and so burst duration) is unchanged
       v
  [ continuous-phase MFSK ]    tone n = (85 + 3n) * 48000/8192 Hz
       |
@@ -274,20 +288,22 @@ audio out  ->  up to 8 identical bursts, selected as FEC strength
 
 ### The schedule
 
-In normal grid mode, the same chat message is sent up to 8 times on the shared world-time
-schedule. The receiver folds bursts that land on the same grid position and sums their
-soft metrics. The selected FEC strength is not transmitted as a setting: a receiver can
-decode whatever number of bursts it hears, so both operators can use compatible qnr
-builds without configuring a repeat count manually.
+In normal grid mode, the same chat message is sent up to `REPEATS` (currently 60) times
+on the shared world-time schedule. The receiver folds bursts that land on the same grid
+position and sums their soft metrics. The selected FEC strength is not transmitted as a
+setting: a receiver can decode whatever number of bursts it hears, so both operators can
+use compatible qnr builds without configuring a repeat count manually. A handful of
+repeats is enough for a quick nearby exchange; running the same schedule out to its full
+length reaches for WSPR-grade weak-signal margin instead, from the same protocol.
 
 ```
- |<----------- TX ----------->|<------- listen 1 ------->|<--------- listen 2 -------->|
- | g |        chat burst       | g |       decode          | g |        decode          | g |
- +---+-------------------------+---+-----------------------+---+-----------------------+---+
- |<-------------------------------- repeat period ---------------------------------------------->|
+ |<----------- TX ----------->|<----------- RX ------------>|
+ | g |     chat burst     | g | g |       decode        | g |
+ +---+---------------------+---+---+----------------------+---+
+ |<-------------------- repeat period -------------------->|
 ```
 
-All basic frames remain equal because every message uses the same 16-byte payload.
+Both basic frames remain equal because every message uses the same 16-byte payload.
 There is no ACK, per-character state, or automatic retry. Repeated bursts are simply
 additional observations of the same coded chat message.
 
@@ -310,15 +326,15 @@ trades away weak-signal repeat folding; use normal grid mode for difficult paths
       |
       v
  [ ACQUIRE tuning ]                sweep +/-60 Hz offset x +/-3000 ppm clock drift,
-      |                            scored on the 2 preamble tones only (cheap)
-      v
+      |                            scored on the 2 sync tones only, at their scattered
+      v                            positions across the burst (cheap)
  [ Goertzel bank, 144 tones ]      power per tone, per window, at the found offset
       |                            -- tones split across threads
       v
-[ FOLD each preamble phase ]       every station's own repeats land on top of each other
+[ FOLD each sync phase ]           every station's own repeats land on top of each other
       |                            -- the period is known, so no start time is needed
       v
- [ matched filter on preamble ]    finds the frame inside the folded period
+ [ matched filter on sync markers ] finds the frame inside the folded period
       |
       v
  [ per-burst soft metrics ]        tone power / noise floor, per bit
@@ -339,7 +355,7 @@ trades away weak-signal repeat folding; use normal grid mode for difficult paths
 The two stages do different jobs, and both are needed:
 
 * **Folding** solves *acquisition*. Sync energy from all 8 bursts adds together, so
-  the preamble is found at an SNR where no single burst could be detected.
+  the sync markers are found at an SNR where no single burst could be detected.
 * **Summing LLRs** solves *decoding*. Each burst is an independent observation of
   the same coded bits, so their log-likelihoods add. Averaging tone *power* instead
   would only shrink noise variance, and is worth about half as much.
@@ -350,16 +366,19 @@ A decode never waits for the schedule to end. The receiver tries the shortest wi
 that can contain a whole burst first, and only widens it when that fails:
 
 ```
- attempt 1:  1 burst   ->  39 s of audio    clean signals stop here
- attempt 2:  2 bursts  ->  68 s
- attempt 3:  4 bursts  -> 125 s
- attempt 4:  everything                     weak signals need all 8
+ attempt 1:  1 burst    ->   38 s of audio    clean signals stop here
+ attempt 2:  2 bursts   ->   65 s
+ attempt 3:  4 bursts   ->  121 s
+ attempt 4:  8 bursts   ->  232 s
+ attempt 5:  16 bursts  ->  454 s
+ attempt 6:  32 bursts  ->  898 s
+ attempt 7:  everything -> 1675 s (~28 min)   weak/far-away signals may need all 60
 ```
 
 A window of one period plus one burst is guaranteed to contain a complete burst
 wherever the recording happens to start, so no lead-in has to be known or detected.
-The ladder costs at most about 1.9x a single full-length attempt when it fails all
-the way, and about one seventh of one when the signal is clean.
+Doubling the ladder instead of jumping straight to the ceiling means a weak signal's
+"repeats actually needed" is measured to within 2x, not just "somewhere under 60".
 
 ### Tolerance to mistuning and to sloppy clocks
 
@@ -376,9 +395,9 @@ searched rather than assumed:
   schedule, which used to smear the fold into noise. The listening gap is therefore
   treated as approximate: drift stretches the period *and* the symbol length.
 
-Acquisition scores these on the two preamble tones alone, which costs 2/144 of a
-full tone bank per candidate, so the whole grid is affordable. Only the best few
-tunings get a full decode.
+Acquisition scores these on the two sync tones alone, at their scattered burst
+positions, which costs 2/144 of a full tone bank per candidate, so the whole grid is
+affordable. Only the best few tunings get a full decode.
 
 Windows are mapped to the fold by absolute sample position, so a fractional period
 never accumulates rounding error across the schedule.
@@ -444,9 +463,9 @@ already collected.
 The gap is therefore set by the protocol's need to carry a reply, not by sensitivity,
 and costs nothing but wall-clock time.
 
-Other sweeps: rate 1/3 beat rate 1/2 (67% vs 21%), interleaver 64 beat 16; preamble
-length made no measurable difference between 2, 4 and 8 pairs. These compared equal
-or near-equal duty cycles, so they are not affected by the issue above.
+Other sweeps: rate 1/3 beat rate 1/2 (67% vs 21%), interleaver 64 beat 16; the number
+of sync-marker pairs made no measurable difference between 2, 4 and 8 pairs. These
+compared equal or near-equal duty cycles, so they are not affected by the issue above.
 
 For context, WSPR decodes to about -29 dB at 0.45 bit/s with 4 tones. Converting this
 modem's -20 dB in 3 kHz to WSPR's 2.5 kHz reference gives about -19 dB, so it is
@@ -461,7 +480,7 @@ listening gaps; see the note above.
 | File | Role |
 |------|------|
 | `src/cli.ts` | the user-facing program |
-| `src/rxtx.ts` | simultaneous transmit + continuous receive (`qnr rxtx`) |
+| `src/rxtx.ts` | simultaneous transmit + continuous receive; the default station when `qnr` runs with no subcommand |
 | `src/protocol.ts` | frozen parameters, the single source of truth |
 | `src/tx.ts` | framing, interleaving, continuous-phase modulator |
 | `src/fold.ts` | repeat correlation receiver (folding + LLR combining) |

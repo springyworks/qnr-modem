@@ -11,6 +11,7 @@ import { TAIL_BITS, viterbiDecode, type CodeRate } from './conv.js';
 import { decodeTieredFrame, LENGTH_BITS, parseInfoBits } from './framing.js';
 import { deinterleave } from './interleave.js';
 import { fullSpectrogram, spectroGeometry, type Spectrogram } from './spectro.js';
+import { dataSymbolOffsets, syncMarkerPositions } from './synclayout.js';
 
 /** Symbols a frame occupies, derived from the protocol rather than detected. */
 export function dataSymbolCount(messageBytes: number, rate: CodeRate): number {
@@ -109,7 +110,8 @@ export function decodeSpectrogramAll(
   const stretch = 1 + (opts.driftPpm ?? 0) / 1e6;
   const period = opts.periodSamples * stretch;
   const spb = symbolSamples(opts.baud, sampleRate) * stretch;
-  const preambleSymbols = opts.preamblePairs * 2;
+  const markerPositions = syncMarkerPositions(opts.dataSymbols, opts.preamblePairs);
+  const dataOffsets = dataSymbolOffsets(opts.dataSymbols, opts.preamblePairs);
   const periodWindows = Math.max(1, Math.round(period / hop));
   const modulo = (value: number, divisor: number): number => ((value % divisor) + divisor) % divisor;
   const slotAt = (pos: number): number => Math.round(modulo(pos, period) / hop) % periodWindows;
@@ -133,12 +135,13 @@ export function decodeSpectrogramAll(
     foldFloor[slot] = medianFloor(folded, dst, scratch);
   }
 
-  // Matched filter on the known alternating preamble, evaluated over the folded period.
+  // Matched filter on the known alternating sync markers, scattered across the folded period
+  // instead of clustered at its start (see synclayout.ts); the leading marker still anchors slot 0.
   const scores: Array<{ slot: number; score: number }> = [];
   for (let slot = 0; slot < periodWindows; slot++) {
     let score = 0;
-    for (let j = 0; j < preambleSymbols; j++) {
-      const at = slotAt(slot * hop + j * spb);
+    for (let j = 0; j < markerPositions.length; j++) {
+      const at = slotAt(slot * hop + markerPositions[j]! * spb);
       const tone = j % 2 === 0 ? SYM_SYNC_1 : SYM_SYNC_2;
       score += folded[at * NUM_TONES + tone]! / foldFloor[at]!;
     }
@@ -166,10 +169,12 @@ export function decodeSpectrogramAll(
   const top = Math.min(opts.candidates ?? 24, scores.length);
   const results: FoldResult[] = [];
   const sampleEnd = sampleOffset + windows * hop;
+  const lastOffset = dataOffsets[dataOffsets.length - 1] ?? 0;
 
   for (let c = 0; c < top; c++) {
     const phaseSamples = modulo(scores[c]!.slot * hop, period);
-    const dataPhase = modulo(phaseSamples + preambleSymbols * spb, period);
+    // The leading marker sits at burst position 0, so the matched-filter phase IS the burst start.
+    const dataPhase = phaseSamples;
     const soft = new Float64Array(bits);
     let bursts = 0;
     const firstBurst = dataPhase + Math.ceil((sampleOffset - dataPhase) / period) * period;
@@ -178,13 +183,13 @@ export function decodeSpectrogramAll(
     // partial burst at either edge: it would leak an unrelated time slot into the LLR sum.
     for (
       let burstStart = firstBurst;
-      burstStart + (opts.dataSymbols - 1) * spb <= sampleEnd;
+      burstStart + lastOffset * spb <= sampleEnd;
       burstStart += period
     ) {
       const burstSoft = new Float64Array(bits);
       let complete = true;
       for (let symbolIndex = 0; symbolIndex < opts.dataSymbols; symbolIndex++) {
-        const windowIndex = Math.round((burstStart + symbolIndex * spb - sampleOffset) / hop);
+        const windowIndex = Math.round((burstStart + dataOffsets[symbolIndex]! * spb - sampleOffset) / hop);
         if (windowIndex < 0 || windowIndex >= windows) {
           complete = false;
           break;

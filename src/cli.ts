@@ -13,6 +13,8 @@ import {
   AMPLITUDE,
   BAUD,
   BURST_SAMPLES,
+  CHUNKS,
+  CHUNK_SLOT_SAMPLES,
   DATA_SYMBOLS,
   DECODE_OPTIONS,
   FRAME_OPTIONS,
@@ -22,6 +24,7 @@ import {
   SLOT_SAMPLES,
   summary,
 } from './protocol.js';
+import { runFastChat } from './fastchat.js';
 import { runRxTx } from './rxtx.js';
 import { modulateChatMessage } from './tx.js';
 import { readWav, writeWav16 } from './wav.js';
@@ -56,16 +59,18 @@ function rmsOf(block: Float32Array): number {
 function usage(): void {
   console.log(`qnr - 144-tone MFSK weak signal modem
 
-  qnr tx "MESSAGE"            transmit through the default audio output
-  qnr tx "MESSAGE" -o out.wav write the transmission to a WAV file
-  qnr rx                      listen on the default audio input
-  qnr rx -i in.wav            decode a WAV file
-  qnr rxtx ["MESSAGE"]        transmit (if given a message) and listen at the same time
-  qnr rxtx -tui               same, with the mouse-aware station dashboard
+  qnr                          listen continuously, ready to send chat messages
+  qnr "MESSAGE"                queue one chat message and keep listening at the same time
+  qnr -tui                     same, with the mouse-aware station dashboard
+  qnr tx "MESSAGE"             one-shot transmit only, through the default audio output
+  qnr tx "MESSAGE" -o out.wav  one-shot transmit, written to a WAV file instead
+  qnr rx                       listen only, no ability to send
+  qnr rx -i in.wav             decode a WAV file
+  qnr fastchat ["MESSAGE"]     3-second-grid incremental-redundancy chat (see below)
 
 Messages are plain chat: up to ${CHAT_PAYLOAD_BYTES} printable ASCII characters per frame,
-no per-character mode, no ACK handshake, no automatic retry. \`rxtx -tui\` sends a
-typed line as soon as Enter is pressed (Shift+Enter inserts a line break instead),
+no per-character mode, no ACK handshake, no automatic retry. A typed line is sent as
+soon as Enter is pressed (Shift+Enter inserts a line break instead in the TUI),
 repeated back-to-back as many times as the dashboard's FEC strength control says.
 
 Test-signal options for tx (both to file and to the air):
@@ -76,8 +81,17 @@ Test-signal options for tx (both to file and to the air):
   --jobs=N                    worker threads (default: cores - 1)
 
 Examples:
+  qnr "CQ CQ" -tui
   qnr tx "CQ CQ" -o weak.wav --snr=-20 --profile=poor
-  qnr rxtx -tui
+  qnr fastchat "CQ CQ"
+
+qnr fastchat: the same chat payload and conv+Viterbi+CRC-16 pipeline as the default
+station, but the codeword is striped into ${CHUNKS} equal chunks and sent as a repeating
+cycle of short (~${(CHUNK_SLOT_SAMPLES / SAMPLE_RATE).toFixed(1)}s) bursts on a shared clock-derived grid instead of one long burst. A station
+folds whatever chunk bursts it actually hears -- there is no need to have heard the earlier
+ones, or to know how many exist -- so nearby stations decode after a couple of bursts while
+weak/late-joining stations keep accumulating LLR across as many wraps of the cycle as it
+takes. A message repeats forever, one chunk per ~3s slot, until you send a new one.
 
 Audio routing is left to the system mixer (pavucontrol); there are no device
 options. Modem parameters are fixed by the protocol and cannot be changed.
@@ -303,14 +317,26 @@ async function main(): Promise<void> {
   }
 
   if (mode === 'rxtx') {
-    const tui = args.includes('-tui') || args.includes('--tui');
-    const message = args.slice(1).find((a) => !a.startsWith('-'));
-    runRxTx({ message, tui });
+    console.error('qnr rxtx has been folded into the default station -- just run `qnr` (or `qnr "MESSAGE"`, `qnr -tui`).');
+    process.exitCode = 1;
     return;
   }
 
-  usage();
-  if (mode) process.exitCode = 1;
+  if (mode === 'fastchat') {
+    const message = args.slice(1).find((a) => !a.startsWith('-'));
+    runFastChat({ message });
+    return;
+  }
+
+  if (mode === '-h' || mode === '--help') {
+    usage();
+    return;
+  }
+
+  // Default: continuous rxtx station -- bare `qnr`, `qnr "MESSAGE"`, `qnr -tui` all land here.
+  const tui = args.includes('-tui') || args.includes('--tui');
+  const message = args.find((a) => !a.startsWith('-'));
+  runRxTx({ message, tui });
 }
 
 main().catch((e: Error) => {

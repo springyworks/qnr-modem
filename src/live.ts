@@ -2,9 +2,10 @@ import { SAMPLE_RATE } from './config.js';
 import { workerCount } from './pool.js';
 import {
   BAUD,
-  BASIC_FRAMES_PER_REPEAT,
   BURST_SAMPLES,
+  DATA_SYMBOLS,
   DECODE_OPTIONS,
+  FRAME_OPTIONS,
   GUARD_SAMPLES,
   INTERLEAVER_WIDTH,
   PAYLOAD_BYTES,
@@ -21,7 +22,7 @@ const RING_CAPACITY = SCHEDULE_SAMPLES + PERIOD_SAMPLES;
 const MIN_DECODE_SAMPLES = BURST_SAMPLES + GUARD_SAMPLES;
 const DUPLICATE_WINDOW_MS = (SCHEDULE_SAMPLES / SAMPLE_RATE) * 1000;
 
-export type FrameLane = 'tx' | 'listen-1' | 'listen-2' | 'unsynced';
+export type FrameLane = 'tx' | 'rx' | 'unsynced';
 export type DecodeSource = 'folded' | 'loud';
 
 export interface HeardFrame {
@@ -59,8 +60,9 @@ const dbfs = (rms: number): number => 20 * Math.log10(Math.max(rms, 1e-6));
 const modulo = (value: number, divisor: number): number => ((value % divisor) + divisor) % divisor;
 
 /**
- * A phase is synchronized only when its preamble lands near the burst position inside one of
- * the three basic frames. Search still accepts any phase; this label is for routing and display.
+ * A phase is synchronized only when its sync markers land near the burst position inside one
+ * of the two basic frames (tx, rx). Search still accepts any phase; this label is for routing
+ * and display.
  */
 export function laneForPhase(phaseSamples: number | undefined): FrameLane {
   if (phaseSamples === undefined) return 'unsynced';
@@ -70,10 +72,7 @@ export function laneForPhase(phaseSamples: number | undefined): FrameLane {
   const expected = slot * SLOT_SAMPLES;
   const distance = Math.min(Math.abs(slotPhase - expected), PERIOD_SAMPLES - Math.abs(slotPhase - expected));
   if (distance > GUARD_SAMPLES / 2) return 'unsynced';
-  if (slot === 0) return 'tx';
-  if (slot === 1) return 'listen-1';
-  if (slot === BASIC_FRAMES_PER_REPEAT - 1) return 'listen-2';
-  return 'unsynced';
+  return slot === 0 ? 'tx' : 'rx';
 }
 
 /**
@@ -126,7 +125,14 @@ export class ContinuousReceiver {
       },
       SAMPLE_RATE,
       'conv',
-      { interleaverWidth: INTERLEAVER_WIDTH, rate: RATE, combineRepeats: false, maxPayloadBytes: PAYLOAD_BYTES }
+      {
+        interleaverWidth: INTERLEAVER_WIDTH,
+        rate: RATE,
+        combineRepeats: false,
+        maxPayloadBytes: PAYLOAD_BYTES,
+        dataSymbols: DATA_SYMBOLS,
+        preamblePairs: FRAME_OPTIONS.preamblePairs,
+      }
     );
   }
 

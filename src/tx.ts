@@ -13,6 +13,7 @@ import { convEncode, type CodeRate } from './conv.js';
 import { buildInfoBits } from './framing.js';
 import { hammingEncode } from './hamming.js';
 import { INTERLEAVER_WIDTH, interleave } from './interleave.js';
+import { distributeSync } from './synclayout.js';
 
 function hammingSymbols(data: Uint8Array): number[] {
   const symbols: number[] = [];
@@ -46,6 +47,10 @@ export interface FrameOptions {
   rate?: CodeRate;
 }
 
+/** Generic/arbitrary-length path (e.g. plain `qnr tx` file encode): total length isn't known to
+ * the receiver ahead of time, so this keeps the classic leading preamble rather than the
+ * fixed-budget chat burst's scattered markers (see `chatBytesToSymbols`), which rx.ts's streaming
+ * decoder can only locate when it knows the burst's exact data-symbol count in advance. */
 export function bytesToSymbols(data: Uint8Array, mode: FecMode = 'hamming', opts: FrameOptions = {}): number[] {
   const { interleaverWidth = INTERLEAVER_WIDTH, preamblePairs = PREAMBLE_PAIRS, rate = 2 } = opts;
   const symbols: number[] = [];
@@ -74,9 +79,8 @@ function tiledConvSymbols(data: Uint8Array, interleaverWidth: number, rate: Code
 
 export function chatBytesToSymbols(data: Uint8Array, totalSymbols: number, opts: FrameOptions = {}): number[] {
   const { interleaverWidth = INTERLEAVER_WIDTH, preamblePairs = PREAMBLE_PAIRS, rate = 2 } = opts;
-  const symbols: number[] = [];
-  for (let i = 0; i < preamblePairs; i++) symbols.push(SYM_SYNC_1, SYM_SYNC_2);
-  symbols.push(...tiledConvSymbols(data, interleaverWidth, rate, totalSymbols));
+  const coded = tiledConvSymbols(data, interleaverWidth, rate, totalSymbols);
+  const symbols = distributeSync(coded, preamblePairs, SYM_SYNC_1, SYM_SYNC_2);
   symbols.push(SYM_IDLE, SYM_IDLE, SYM_IDLE);
   return symbols;
 }

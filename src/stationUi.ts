@@ -336,11 +336,22 @@ export class StationDashboard {
 
   /** Rows 0-2 as before; row 3 cycles TX test SNR, row 4 cycles the Watterson HF profile. */
   private activateControl(index: number): void {
-    if (index === 0) this.handlers.onFecLevel(this.fecLevel >= this.fecMax ? 1 : this.fecLevel + 1);
+    if (index === 0) this.handlers.onFecLevel(this.stepFec(1));
     else if (index === 1) this.handlers.onOffGrid(!this.offGrid);
     else if (index === 2) this.handlers.onTune();
     else if (index === 3) this.handlers.onTxSnrCycle(1);
     else if (index === 4) this.handlers.onTxProfileCycle(1);
+  }
+
+  /** Doubling steps (1,2,4,8...) instead of +1 each press -- reaching a WSPR-grade repeat count
+   * would otherwise take dozens of key presses. Wraps back to x1 past the ceiling. */
+  private stepFec(dir: 1 | -1): number {
+    const steps = [1, 2, 4, 8, 16, 32, 64, 128, 256].filter((s) => s <= this.fecMax);
+    if (steps[steps.length - 1] !== this.fecMax) steps.push(this.fecMax);
+    const current = steps.findIndex((s) => s >= this.fecLevel);
+    const at = current === -1 ? steps.length - 1 : current;
+    const next = dir > 0 ? (at + 1) % steps.length : (at - 1 + steps.length) % steps.length;
+    return steps[next]!;
   }
 
   private toggleControlsFocus(): void {
@@ -363,9 +374,9 @@ export class StationDashboard {
     } else if (key?.name === 'return' || key?.name === 'enter' || key?.name === 'space') {
       this.activateControl(this.controlSelected);
     } else if (key?.name === 'right' && this.controlSelected === 0) {
-      this.handlers.onFecLevel(this.fecLevel + 1);
+      this.handlers.onFecLevel(this.stepFec(1));
     } else if (key?.name === 'left' && this.controlSelected === 0) {
-      this.handlers.onFecLevel(this.fecLevel - 1);
+      this.handlers.onFecLevel(this.stepFec(-1));
     } else if (key?.name === 'right' && this.controlSelected === 3) {
       this.handlers.onTxSnrCycle(1);
     } else if (key?.name === 'left' && this.controlSelected === 3) {

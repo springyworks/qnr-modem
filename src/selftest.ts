@@ -147,6 +147,8 @@ function testChatMessageModem(): void {
       interleaverWidth: FRAME_OPTIONS.interleaverWidth,
       rate: FRAME_OPTIONS.rate,
       maxPayloadBytes: PAYLOAD_BYTES,
+      dataSymbols: DATA_SYMBOLS,
+      preamblePairs: FRAME_OPTIONS.preamblePairs,
     })
   );
   check('chat frame survives FEC and CRC', decoded === expected, `got ${JSON.stringify(decoded)}`);
@@ -161,6 +163,8 @@ function testChatMessageModem(): void {
       interleaverWidth: FRAME_OPTIONS.interleaverWidth,
       rate: FRAME_OPTIONS.rate,
       maxPayloadBytes: PAYLOAD_BYTES,
+      dataSymbols: DATA_SYMBOLS,
+      preamblePairs: FRAME_OPTIONS.preamblePairs,
     })
   );
   check(
@@ -177,7 +181,7 @@ function addSignal(target: Float32Array, signal: Float32Array, start: number): v
 }
 
 function testInterleavedFoldedStations(): void {
-  console.log('Three-frame chat repeat folding');
+  console.log('Two-frame chat repeat folding');
   const messageA = 'STATION A';
   const messageB = 'STATION B';
   const burstA = modulateChatMessage(encodeChatMessage(messageA), DATA_SYMBOLS, BAUD, 0.5, SAMPLE_RATE, FRAME_OPTIONS);
@@ -189,13 +193,13 @@ function testInterleavedFoldedStations(): void {
   for (let repeatIndex = 0; repeatIndex < repeats; repeatIndex++) {
     const periodStart = lead + repeatIndex * PERIOD_SAMPLES;
     addSignal(samples, burstA, periodStart + GUARD_SAMPLES);
-    addSignal(samples, burstB, periodStart + 2 * SLOT_SAMPLES + GUARD_SAMPLES);
+    addSignal(samples, burstB, periodStart + SLOT_SAMPLES + GUARD_SAMPLES);
   }
 
   const results = foldDecodeAll(samples, DECODE_OPTIONS);
   const stationA = results.find((result) => decodeChatMessage(result.text) === messageA);
   const stationB = results.find((result) => decodeChatMessage(result.text) === messageB);
-  check('transmit and second-listen frames decode', Boolean(stationA && stationB));
+  check('transmit and rx frames both decode', Boolean(stationA && stationB));
   check(
     'each station combines its own repeats',
     stationA?.bursts === repeats && stationB?.bursts === repeats,

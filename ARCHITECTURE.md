@@ -3,16 +3,19 @@
 This document describes the timing structure the protocol is built from, and thinks
 through what a real two-way ham radio chat needs on top of it: a nearby correspondent,
 a far-away listener on the same channel, and no configuration knobs anywhere. Some of
-this is how `qnr` already works (including `qnr rxtx`, which implements §4, §5 and §7
-below); some of it is a proposed direction and is labelled as such. See the "How it
+this is how `qnr` already works (including its default station mode, which implements
+§4, §5 and §7 below, with no `rxtx` subcommand needed -- there is only one app, `qnr`);
+some of it is a proposed direction and is labelled as such. See the "How it works"
 works" section of [README.md](README.md) for the DSP chain itself (framing, coding,
 folding); this document stays one level above that, at the level of who transmits when
 and what a station does with the rest of its time.
 
-> **Current protocol:** every frame carries a fixed four-byte typewriter packet
-> `[ASCII character, sequence ID, ACK code, ACK ID]`. A repeat is three basic frames:
-> transmit, decode-only listen, and listen/reply. ACK code `0` is a complete ACK. The
-> older two-slot exploration in §3 is retained as historical design context only.
+> **Current protocol:** the chat protocol is ACK-less -- no per-character typewriter packet,
+> no ACK handshake, no automatic retry (that old four-byte packet format is gone). A repeat is
+> two basic frames: transmit, then listen/rx, repeated as many times as the operator's chosen
+> FEC strength says (`REPEATS`, currently up to 60 -- enough to reach for WSPR-grade
+> weak-signal margin from the same protocol, not just a quick nearby exchange). The older
+> two-slot/ACK exploration in §3 is retained as historical design context only.
 
 ---
 
@@ -20,7 +23,7 @@ and what a station does with the rest of its time.
 
 Every unit of time on the air is the same fixed length, whether or not anyone is
 transmitting in it. Call one such unit a **basic-frame**. Its length, `T_slot`, is
-fixed by the protocol (guard + burst + guard, ~9.1 s: 2 s + 5.1 s + 2 s) and is
+fixed by the protocol (guard + burst + guard, ~13.9 s: 2 s + 9.9 s + 2 s) and is
 never negotiated, detected, or configurable — every station on the channel agrees on
 it simply by running the same frozen build.
 
@@ -31,17 +34,17 @@ kind is coming until it has decoded (or failed to decode) what is inside it:
   KIND 1 -- occupied basic-frame (this station is sending "the message")
 
   +----------+--------------------------------------+----------+
-  |  guard   |   144-tone MFSK packet burst (5.1 s) |  guard   |
-  |   2 s    |   ASCII | ID | ACK | ACK-ID, CRC/FEC |  gap 2 s |
+  |  guard   |   144-tone MFSK chat burst (9.9 s)   |  guard   |
+  |   2 s    |   16-byte payload, CRC-16, conv FEC   |  gap 2 s |
   +----------+--------------------------------------+----------+
-  |<--------------------- T_slot ~= 9.1 s -------------------->|
+  |<--------------------- T_slot ~= 13.9 s ------------------->|
 
   KIND 2 -- empty basic-frame (nobody keys up)
 
   +-------------------------------------------------------------+
   |                         noise only                           |
   +-------------------------------------------------------------+
-  |<--------------------- T_slot ~= 9.1 s -------------------->|
+  |<--------------------- T_slot ~= 13.9 s ------------------->|
 ```
 
 The leading guard absorbs PTT keying, path delay and clock skew; the trailing guard
@@ -58,19 +61,21 @@ Chained together, the air is nothing but a sequence of these:
 
 ## 2. The fixed schedule as a chain of basic-frames
 
-Three basic-frames make one **period** (~27.4 s): transmit, listen 1, then listen 2
-or reply. `qnr tx` repeats a packet up to 8 times (`REPEATS`), so one maximum packet
-run is 24 basic frames. `qnr rxtx` stops the run early when it hears ACK code `0` for
-the outgoing sequence ID.
+Two basic-frames make one **period** (~27.7 s): transmit, then listen/rx -- no
+separate reply slot; the chat protocol carries no ACK to reply with. Plain `qnr`
+repeats a message up to `REPEATS` times (currently 60), so one maximum run is 120
+basic frames (~28 minutes) -- a ceiling raised well past a quick-chat count so the
+same schedule can also reach for WSPR-grade weak-signal margin by repeating longer.
+The receiver never needs to know how many repeats were actually sent; it blindly
+folds whatever it hears.
 
 ```
- period:    1        2        3        4        5        6        7        8
- tx:       [packet] [packet] [packet] [packet] [packet] [packet] [packet] [packet]
- listen 1: [decode] [decode] [decode] [decode] [decode] [decode] [decode] [decode]
- listen 2: [ACK/reply] [--] [--] [--] [--] [--] [--] [--]
+ period:  1        2        3        4        5      ...      60
+ tx:     [burst] [burst] [burst] [burst] [burst] ... [burst]
+ rx:     [--]    [--]    [--]    [--]    [--]    ... [--]
 ```
 
-`[packet]` and `[--]` are exactly the two kinds of basic-frame from §1 — a slot being
+`[burst]` and `[--]` are exactly the two kinds of basic-frame from §1 — a slot being
 "empty" is not a gap in the schedule, it is a basic-frame like any other, it just
 happens to carry noise. This is why the timing works without either side announcing
 anything: **the schedule, not the traffic, defines the slots.**
@@ -123,24 +128,27 @@ per-listener. Two directions keep that constraint while giving C-far a real chan
 Both keep "no modes, no options": the schedule stays a fixed sequence of
 equal-length basic-frames: what changes is only who is allowed to use an empty one.
 
-## 4. Repeat-until-ACK (implemented in `qnr rxtx`)
+## 4. Repeat as many times as useful (implemented in the default `qnr` station)
 
-`qnr tx` -- the simple, deterministic reference/test path -- still plays all 8 bursts
-unconditionally; it does not listen while it transmits. `qnr rxtx` (`src/rxtx.ts`) is
-the smarter station described here:
+`qnr tx` -- the simple, deterministic reference/test path -- always plays exactly the
+chosen repeat count unconditionally; it does not listen while it transmits. Plain
+`qnr` (`src/rxtx.ts`) is the smarter station described here:
 
 1. Key up and send its own transmit frame, same as `tx` (this is the one basic-frame where the
    local software cannot also be usefully decoding *that same burst* -- see §5).
-2. During the two following listening frames, the decoder keeps running against whatever
+2. During the following listen/rx frame, the decoder keeps running against whatever
    has just arrived -- it never stops, including while sending.
-3. Stop repeating as soon as it receives ACK code `0` addressed to its outgoing
-  sequence ID, instead of always running to its 8-burst ceiling.
+3. Repeat as many times as the operator's chosen FEC strength says (1..`REPEATS`,
+   currently up to 60) -- there is no ACK to stop early on, and none is needed: the
+   receiver folds however many repeats it actually heard, whatever that count was.
 
-This changes nothing about the on-air timing (still fixed basic-frames, still up to
-8 repeats) -- it only changes when the *transmitting* station chooses to stop, which
-is a local decision and does not need agreement from anyone else on the channel.
+This changes nothing about the on-air timing (still fixed basic-frames) -- the only
+choice is how many repeats the *transmitting* station sends, a local decision that
+does not need agreement from anyone else on the channel. A handful of repeats suits
+a quick nearby exchange; running the same schedule out toward its `REPEATS` ceiling
+reaches for WSPR-grade weak-signal margin instead, from the identical protocol.
 
-## 5. TX and RX in the same process (implemented in `qnr rxtx`)
+## 5. TX and RX in the same process (implemented in the default `qnr` station)
 
 Radio is half-duplex: a station cannot usefully decode its own transmitter while it
 is keyed (it would just be decoding itself, badly, over the top of its own PTT
@@ -152,8 +160,8 @@ noise). Everywhere else, the process should be receiving:
    +--------------+   own slot arrives,     +--------------+
    |              |   has traffic to send   |              |
    |  LISTEN      |------------------------>|  KEY_TX      |
-   |  (decode      |                         |  (own packet,|
-   |  every        |<------------------------|  5.1 s)      |
+   |  (decode      |                         |  (own burst, |
+   |  every        |<------------------------|  9.9 s)      |
    |  basic-frame) |   burst finishes        |              |
    +--------------+                         +--------------+
 
@@ -163,40 +171,41 @@ noise). Everywhere else, the process should be receiving:
 ```
 
 A **receive-only station is always in `LISTEN`**: for it, every basic-frame,
-occupied or not, gets a decode attempt, forever. Both `qnr rx` and `qnr rxtx` tie
+occupied or not, gets a decode attempt, forever. Both `qnr rx` and plain `qnr` tie
 their weak-signal redecode cadence to `T_slot` (`SLOT_SAMPLES` in
 [src/protocol.ts](src/protocol.ts)), so there is genuinely one attempt per elementary
 slot, while their direct path stays ready for loud off-grid packets at any time.
 
 ## 6. World time as the sync anchor
 
-Live `qnr rxtx` derives the basic-frame grid from wall time (NTP, GPS, or another
-shared clock); its own first packet waits for the next guard-aligned transmit frame
-and later repeats stay in that same three-frame phase. WAV input uses sample zero as
-the equivalent epoch. The receiver still matched-filters every observed preamble
-phase: a loud off-grid signal is decoded immediately by the direct path, then its ACK
-is scheduled in the next world-time transmit frame to resynchronize both stations.
+Live `qnr` (the default station) derives the basic-frame grid from wall time (NTP,
+GPS, or another
+shared clock); its own first burst waits for the next guard-aligned transmit frame
+and later repeats stay in that same two-frame phase. WAV input uses sample zero as
+the equivalent epoch. The receiver still matched-filters every observed sync-marker
+phase: a loud off-grid signal is decoded immediately by the direct path with no
+need to wait for the world-time grid at all.
 
-## 7. A minimal, pipe-friendly terminal UI (implemented as `qnr rxtx -tui`)
+## 7. A minimal, pipe-friendly terminal UI (implemented as `qnr -tui`)
 
-`src/stationUi.ts` is the `blessed`-based full-screen dashboard used by `qnr rxtx
--tui`. It has separate RX and TX panes, VU meters for input, peak, ring, folded
+`src/stationUi.ts` is the `blessed`-based full-screen dashboard used by `qnr -tui`.
+It has separate RX and TX panes, VU meters for input, peak, ring, folded
 repeats, output, repeat progress and queue pressure, plus an air-traffic trace and
-message entry line. Plain `qnr rxtx` remains append-only and pipe-friendly; `-tui`
+message entry line. Plain `qnr` remains append-only and pipe-friendly; `-tui`
 falls back to that line prompt when no TTY exists.
 
 ```
  RX / DECODER            TX / SCHEDULER
  IN      |####------|    OUT     |########--|
- RING    |#########-|    REPEAT  |###-------|  3/8
- FOLD    |####------|  3/8 raw   QUEUE   |##--------|  2
+ RING    |#########-|    REPEAT  |###-------|  3/60
+ FOLD    |####------|  3/60 raw  QUEUE   |##--------|  2
  DIRECT  SEARCH          RADIO   KEYED
- TEXT    HELLO WOR       STATUS  burst 3/8 - "L" id=4 ack=17
+ TEXT    HELLO WOR       STATUS  burst 3/60 - "HELLO WORLD"
 ```
 
-The RX pane shows TX/listen-1/listen-2 folding evidence, the rolling 256-character
-receive line, and the direct decoder state; the TX pane shows packet ID/ACK state,
-repeat progress, output level, and queue depth.
+The RX pane shows TX/RX folding evidence, the rolling 256-character
+receive line, and the direct decoder state; the TX pane shows repeat progress,
+output level, and queue depth.
 
 ---
 
@@ -205,14 +214,13 @@ repeat progress, output level, and queue depth.
 | Idea | Status |
 |------|--------|
 | Fixed-length basic-frame, occupied or noise-only | Implemented (`SLOT_SAMPLES`, `PERIOD_SAMPLES` in [src/protocol.ts](src/protocol.ts)) |
-| 8-repeat, 3-frame TX/listen/listen schedule | Implemented |
-| Four-byte character/ID/ACK/ACK-ID packet | Implemented |
-| ACK code 0 stops a packet repeat run | Implemented |
-| Progressive decode ladder (1, 2, 4, 8 bursts) | Implemented ([src/search.ts](src/search.ts)) |
-| Simultaneous TX + RX in one process (`qnr rxtx`) | Implemented ([src/rxtx.ts](src/rxtx.ts)) |
-| A stops repeating once it hears ACK code 0 for its packet ID | Implemented (`qnr rxtx`; `qnr tx` still always sends all 8) |
-| Redecode cadence tied to `T_slot` (one attempt per basic-frame) | Implemented in both `qnr rx` and `qnr rxtx` |
-| Full-screen RX/TX TUI | Implemented with Blessed in `qnr rxtx -tui` |
-| Continuous packet-epoch LLR folding in live `rx` | Implemented, including TX/listen-1/listen-2 phases and loud off-grid fallback |
+| Up to `REPEATS` (60), 2-frame TX/RX schedule | Implemented |
+| ACK-less chat payload, CRC-16 + convolutional FEC | Implemented (see [README.md](README.md)) |
+| Progressive decode ladder (1, 2, 4, 8, 16, 32 bursts, then everything) | Implemented ([src/search.ts](src/search.ts)) |
+| Simultaneous TX + RX in one process (default `qnr`, no subcommand) | Implemented ([src/rxtx.ts](src/rxtx.ts)) |
+| Operator picks repeat count 1..`REPEATS` live, no receiver foreknowledge needed | Implemented (default `qnr`; `qnr tx` always sends the chosen count) |
+| Redecode cadence tied to `T_slot` (one attempt per basic-frame) | Implemented in both `qnr rx` and default `qnr` |
+| Full-screen RX/TX TUI | Implemented with Blessed in `qnr -tui` |
+| Continuous LLR folding in live `rx` | Implemented, including TX/RX phases and loud off-grid fallback |
 | Shared/contended slot B for a far third station | Proposed (§3) |
 | Fixed three-station rota | Proposed, would require a protocol version change (§3) |

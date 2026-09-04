@@ -27,8 +27,11 @@ export interface SearchResult extends FoldResult {
   usedSeconds?: number;
 }
 
-/** Audio prefixes tried, in bursts. A clean signal stops at the first and never sees the rest. */
-const LADDER = [1, 2, 4];
+/** Audio prefixes tried, in bursts. A clean signal stops at the first and never sees the rest.
+ * Keeps doubling (rather than jumping straight to the REPEATS ceiling) so a weak/far-away
+ * signal's progressive decode also reports a meaningful "repeats actually needed" figure
+ * instead of only ever landing on 4 or the full schedule. */
+const LADDER = [1, 2, 4, 8, 16, 32];
 
 /**
  * Two-stage receiver. Acquisition sweeps tuning offset and clock drift on the two preamble
@@ -154,6 +157,7 @@ export class DecodeSearch {
       sampleRate,
       periodSamples: this.opts.periodSamples,
       preamblePairs: this.opts.preamblePairs,
+      dataSymbols: this.opts.dataSymbols,
     };
     const drifts = driftGrid();
     const tasks: TuneTask[] = chunk(offsetGrid(), this.jobs).map((offsets) => ({

@@ -1,5 +1,6 @@
 import { SAMPLE_RATE, TONE_SPACING_HZ, symbolSamples } from './config.js';
 import type { SpectroGeometry } from './spectro.js';
+import { syncMarkerPositions } from './synclayout.js';
 
 /**
  * Operators mistune, and a signal relayed through a WebSDR arrives on whatever dial the
@@ -31,6 +32,8 @@ export interface TuneOptions {
   sampleRate: number;
   periodSamples: number;
   preamblePairs: number;
+  /** Needed to locate the sync markers, which are now scattered across the data span. */
+  dataSymbols: number;
 }
 
 export interface TuneHit {
@@ -41,9 +44,9 @@ export interface TuneHit {
 }
 
 /**
- * Scores one tuning offset by folding the two preamble tones at every drift candidate and
- * matched-filtering the alternating pattern. Two tones instead of 144 make the offset sweep
- * affordable; the winner is then handed to a full decode.
+ * Scores one tuning offset by folding the two sync tones at every drift candidate and
+ * matched-filtering the scattered marker pattern. Two tones instead of 144 make the offset
+ * sweep affordable; the winner is then handed to a full decode.
  */
 export function scoreOffset(
   sync: Float64Array,
@@ -54,7 +57,7 @@ export function scoreOffset(
 ): TuneHit {
   const { hop, windows } = geom;
   const nominalSpb = symbolSamples(opts.baud, opts.sampleRate);
-  const preambleSymbols = opts.preamblePairs * 2;
+  const markerPositions = syncMarkerPositions(opts.dataSymbols, opts.preamblePairs);
   const maxWindows = Math.max(1, Math.round((opts.periodSamples * (1 + DRIFT_SPAN_PPM / 1e6)) / hop)) + 1;
   const folded = new Float64Array(maxWindows * 2);
   const hits = new Int32Array(maxWindows);
@@ -88,10 +91,10 @@ export function scoreOffset(
 
     for (let slot = 0; slot < periodWindows; slot++) {
       let score = 0;
-      for (let j = 0; j < preambleSymbols; j++) {
-        score += folded[slotAt(slot * hop + j * spb) * 2 + (j % 2)]!;
+      for (let j = 0; j < markerPositions.length; j++) {
+        score += folded[slotAt(slot * hop + markerPositions[j]! * spb) * 2 + (j % 2)]!;
       }
-      score /= preambleSymbols * mean;
+      score /= markerPositions.length * mean;
       if (score > best.score) best = { offsetHz, driftPpm, score };
     }
   }
@@ -118,5 +121,6 @@ export const defaultTuneOptions = (
   baud: number,
   periodSamples: number,
   preamblePairs: number,
+  dataSymbols: number,
   sampleRate = SAMPLE_RATE
-): TuneOptions => ({ baud, sampleRate, periodSamples, preamblePairs });
+): TuneOptions => ({ baud, sampleRate, periodSamples, preamblePairs, dataSymbols });

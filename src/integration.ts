@@ -36,7 +36,7 @@ async function main(): Promise<void> {
   for (let repeatIndex = 0; repeatIndex < repeats; repeatIndex++) {
     const periodStart = repeatIndex * PERIOD_SAMPLES;
     addSignal(samples, burstA, periodStart + GUARD_SAMPLES);
-    addSignal(samples, burstB, periodStart + 2 * SLOT_SAMPLES + GUARD_SAMPLES);
+    addSignal(samples, burstB, periodStart + SLOT_SAMPLES + GUARD_SAMPLES);
   }
 
   const search = new DecodeSearch(DECODE_OPTIONS, JOBS);
@@ -49,11 +49,11 @@ async function main(): Promise<void> {
     requireResult(stationA.bursts === repeats, `station A combined ${stationA.bursts ?? 0} bursts, expected ${repeats}`);
     requireResult(stationB.bursts === repeats, `station B combined ${stationB.bursts ?? 0} bursts, expected ${repeats}`);
     requireResult(laneForPhase(stationA.phaseSamples) === 'tx', 'station A did not remain in the transmit basic-frame');
-    requireResult(laneForPhase(stationB.phaseSamples) === 'listen-2', 'station B did not remain in the second listening frame');
+    requireResult(laneForPhase(stationB.phaseSamples) === 'rx', 'station B did not remain in the rx basic-frame');
 
-    console.log(`PASS  worker-backed three-frame chat decode (${JOBS} workers)`);
-    console.log(`      tx:       "${messageA}" (${stationA.bursts}x LLR)`);
-    console.log(`      listen-2: "${messageB}" (${stationB.bursts}x LLR)`);
+    console.log(`PASS  worker-backed two-frame chat decode (${JOBS} workers)`);
+    console.log(`      tx: "${messageA}" (${stationA.bursts}x LLR)`);
+    console.log(`      rx: "${messageB}" (${stationB.bursts}x LLR)`);
   } finally {
     search.close();
   }

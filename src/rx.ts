@@ -2,6 +2,7 @@ import {
   BITS_PER_SYMBOL,
   DATA_TONES,
   DEFAULT_SQUELCH_DB,
+  PREAMBLE_PAIRS,
   SAMPLE_RATE,
   SYM_IDLE,
   SYM_SYNC_1,
@@ -14,6 +15,7 @@ import { ToneDetector } from './detector.js';
 import { decodeTieredFrame, parseInfoBits } from './framing.js';
 import { hammingDecode } from './hamming.js';
 import { deinterleave, INTERLEAVER_WIDTH } from './interleave.js';
+import { syncMarkerPositions } from './synclayout.js';
 
 export type RxState = 'SEARCH' | 'SYNC' | 'DATA';
 export type LogKind = 'info' | 'corr' | 'fail';
@@ -32,6 +34,10 @@ export interface ReceiverOptions {
   combineRepeats?: boolean;
   /** Set for tiled chat frames: tries every payload length up to this ceiling against CRC-16. */
   maxPayloadBytes?: number;
+  /** Fixed-length chat bursts only: total data-symbol count, needed to locate the mid-burst
+   * sync markers (see synclayout.ts) so they can be skipped rather than treated as lost data. */
+  dataSymbols?: number;
+  preamblePairs?: number;
 }
 
 export class Receiver {
@@ -61,6 +67,11 @@ export class Receiver {
   private readonly rate: CodeRate;
   private readonly combineRepeats: boolean;
   private readonly maxPayloadBytes?: number;
+  /** Physical positions (0-based, from the burst's leading marker pair) holding a mid-burst
+   * sync marker; undefined when the burst's data-symbol count isn't known in advance. */
+  private readonly markerPositions?: Set<number>;
+  /** Physical symbol position within the current burst, counted from the leading marker pair. */
+  private framePos = 0;
 
   constructor(
     baud: number,
@@ -74,6 +85,10 @@ export class Receiver {
     this.rate = opts.rate ?? 2;
     this.combineRepeats = opts.combineRepeats ?? true;
     this.maxPayloadBytes = opts.maxPayloadBytes;
+    if (opts.dataSymbols !== undefined) {
+      const preamblePairs = opts.preamblePairs ?? PREAMBLE_PAIRS;
+      this.markerPositions = new Set(syncMarkerPositions(opts.dataSymbols, preamblePairs).filter((p) => p >= 2));
+    }
     this.detector = new ToneDetector(sampleRate);
     this.setBaud(baud);
   }
@@ -167,6 +182,7 @@ export class Receiver {
         this.pendingNibble = null;
         this.dropouts = 0;
         this.softBits = [];
+        this.framePos = 2;
         this.setState('DATA');
         this.cb.onLog?.(`Clock locked after ${this.syncCount} sync symbols`, 'info');
         this.handleData(sym, amps);
@@ -265,6 +281,13 @@ export class Receiver {
 
   private handleData(sym: number, amps: Float64Array): void {
     if (this.mode === 'conv') {
+      const pos = this.framePos++;
+      if (this.markerPositions?.has(pos)) {
+        // Expected mid-burst sync marker (see synclayout.ts): consumes a physical slot but
+        // carries no coded bits, so it must be skipped rather than pushed as an erasure.
+        this.dropouts = 0;
+        return;
+      }
       const lost = sym < 0 || sym === SYM_IDLE || sym > 127;
       if (lost) {
         this.dropouts++;
